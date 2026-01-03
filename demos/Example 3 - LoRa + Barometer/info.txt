@@ -1,0 +1,6 @@
+Valor de RSSI,Qualidade do Sinal,O que esperar
+-30 dBm a -50 dBm,Excelente,Os dispositivos estão na mesma sala ou muito próximos.
+-50 dBm a -80 dBm,Muito Bom,"Ligação estável, ideal para ambientes internos com algumas paredes."
+-80 dBm a -100 dBm,Bom / Médio,Sinal típico de média distância (alguns blocos de distância).
+-100 dBm a -120 dBm,Fraco,Começas a estar no limite. A taxa de erro pode aumentar.
+-120 dBm a -140 dBm,Limite Crítico,"Aqui é onde o LoRa brilha. Outras tecnologias já teriam caído, mas o LoRa ainda consegue ler (especialmente se o SF for alto)."
