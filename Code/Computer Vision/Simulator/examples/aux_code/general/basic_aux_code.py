@@ -44,29 +44,37 @@ def set_controls(connection, roll_pwm, pitch_pwm, throttle_pwm):
         65535, 65535, 65535, 65535  # Channels 5-8 ignored
     )
 
+import math
+
 def get_all_telemetry(connection):
     """
-    Fetches the main flight variables from different MAVLink messages.
+    Fetches the latest flight variables instantly without blocking the control loop.
+    Reads from the internal pymavlink cache.
     """
-    # 1. Orientation (Roll, Pitch, Yaw)
-    msg_att = connection.recv_match(type='ATTITUDE', blocking=True)
+    # 1. Pump the message queue: read all incoming messages to update the cache
+    # This loop runs instantly and just clears the buffer
+    while connection.recv_match(blocking=False):
+        pass
 
-    # 2. Altitude (Relative to home)
-    msg_pos = connection.recv_match(type='GLOBAL_POSITION_INT', blocking=True)
+    # 2. Fetch the latest messages from the internal dictionary (Cache)
+    msg_att = connection.messages.get('ATTITUDE')
+    msg_pos = connection.messages.get('GLOBAL_POSITION_INT')
+    msg_hud = connection.messages.get('VFR_HUD')
 
-    # 3. Speeds and Heading (Standard pilot view)
-    msg_hud = connection.recv_match(type='VFR_HUD', blocking=True)
+    # 3. Safety check: When the script just starts, the cache might be empty
+    if not msg_att or not msg_pos or not msg_hud:
+        return None  # Return None until we have all 3 messages at least once
 
-    # Data Processing
+    # 4. Data Processing
     telemetry = {
         "roll": round(math.degrees(msg_att.roll), 1),
         "pitch": round(math.degrees(msg_att.pitch), 1),
         "yaw": round(math.degrees(msg_att.yaw), 1),
         "alt": msg_pos.relative_alt / 1000.0,  # Convert mm to meters
-        "groundspeed": msg_hud.groundspeed,  # m/s
-        "airspeed": msg_hud.airspeed,  # m/s
-        "heading": msg_hud.heading,  # degrees (0-360)
-        "throttle": msg_hud.throttle  # percentage (0-100)
+        "groundspeed": msg_hud.groundspeed,    # m/s
+        "airspeed": msg_hud.airspeed,          # m/s
+        "heading": msg_hud.heading,            # degrees (0-360)
+        "throttle": msg_hud.throttle           # percentage (0-100)
     }
 
     return telemetry
