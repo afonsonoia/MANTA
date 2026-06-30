@@ -648,7 +648,7 @@
         "uuid": "cb818b68-a920-416f-9484-8c0ea35ee499"
       }
     ],
-    "used_designators": "J1-2",
+    "used_designators": "ESP32\\-LEFT1,EXTRA_ENERGY_15V1,ESP32\\-RIGHT1,EXTRA_ENERGY_5V1",
     "variants": []
   },
   "sheets": [
