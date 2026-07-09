@@ -211,7 +211,8 @@
       ],
       "track_widths": [
         0.0,
-        5.0
+        5.0,
+        10.0
       ],
       "tuning_pattern_settings": {
         "diff_pair_defaults": {
@@ -538,7 +539,7 @@
     "last_paths": {
       "idf": "",
       "netlist": "",
-      "plot": "",
+      "plot": "Fabrication_files/",
       "specctra_dsn": "",
       "vrml": ""
     },
@@ -662,7 +663,7 @@
         "uuid": "cb818b68-a920-416f-9484-8c0ea35ee499"
       }
     ],
-    "used_designators": "",
+    "used_designators": "#FLG1-2",
     "variants": []
   },
   "sheets": [

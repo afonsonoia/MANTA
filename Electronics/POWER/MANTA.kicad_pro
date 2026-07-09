@@ -76,7 +76,16 @@
           "width": 0.0
         }
       ],
-      "drc_exclusions": [],
+      "drc_exclusions": [
+        [
+          "silk_edge_clearance|23440000|0|36db2be8-5e60-4744-9278-320c10eb3a1e|12fedf2d-9c1f-4db3-89ef-0f7419cb518f",
+          ""
+        ],
+        [
+          "silk_edge_clearance|39160000|0|36db2be8-5e60-4744-9278-320c10eb3a1e|72780989-f51a-46be-8628-66f3ea7e3257",
+          ""
+        ]
+      ],
       "meta": {
         "version": 2
       },
@@ -538,7 +547,7 @@
     "last_paths": {
       "idf": "",
       "netlist": "",
-      "plot": "",
+      "plot": "Fabrication_Files/",
       "specctra_dsn": "",
       "vrml": ""
     },
@@ -662,7 +671,7 @@
         "uuid": "cb818b68-a920-416f-9484-8c0ea35ee499"
       }
     ],
-    "used_designators": "",
+    "used_designators": "#FLG1-5",
     "variants": []
   },
   "sheets": [

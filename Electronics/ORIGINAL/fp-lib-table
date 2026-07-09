@@ -1,4 +1,0 @@
-(fp_lib_table
-	(version 7)
-	(lib (name "ESP32_Footprints") (type "KiCad") (uri "C:/Users/Afonso Noia/Documents/KiCad/ESP32-DevKit-V1_Kicad_scheme/ESP32_Footprints.pretty") (options "") (descr ""))
-)
