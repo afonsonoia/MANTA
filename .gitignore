@@ -57,3 +57,8 @@ datasets/
 *.h5
 *.pt
 *.pth
+
+# =========================
+# Scratch & Test files
+# =========================
+scratch_*.py
