@@ -1,5 +1,7 @@
 # MANTA - Autonomous RC Plane with Camera-Based Localization
 
+![MANTA Project](media/general_images/main_image.png)
+
 Welcome to the **MANTA** (BlueSky) project! The goal of this project is to design, build, and fly an autonomous RC plane capable of navigating safely in **GPS-denied environments** using camera-based visual localization. 
 
 **Living Document:** This roadmap represents the current plan but is subject to change at any time as the project evolves, new challenges arise, or testing results dictate new priorities.
@@ -18,7 +20,7 @@ The aircraft is powered by a hybrid architecture combining a low-level microcont
     *   **Barometer (BMP280)**: Altitude holding and barometric tracking.
     *   **Voltage Sensor**: Real-time battery cell monitoring.
     *   **Camera**: Captures ground features for visual localization.
-*   **Custom PCB**: A tailored KiCad-designed motherboard to cleanly distribute power and interconnect the ESP32, Raspberry Pi, LoRa radio, sensor breakout boards, receiver, and servos.
+*   **Custom PCBs (Shield Design)**: A custom 2-board KiCad-designed system that unites as a shield. This approach reduces manufacturing costs and results in a more compact footprint that easily fits within the airframe. It cleanly distributes power and interconnects the ESP32, Raspberry Pi, LoRa radio, sensor breakout boards, receiver, and servos. The design incorporates extensive GND copper pours around sensor zones, providing excellent thermodynamic properties and robust protection against electromagnetic interference (EMI).
 
 ---
 
@@ -46,8 +48,16 @@ The project is structured as follows:
 
 *   **Low-Level Firmware**: ESP32 test sketch successfully integrates PWM receiver input reading, deadband smoothing, battery percentage estimation, and servo/ESC command output.
 *   **Visual Navigation**: Python POCs demonstrate feature extraction using lightweight MobileNet structures combined with a KNN classifier to predict coordinates based on matching signatures.
-*   **Electronics**: Initial custom KiCad schematic design completed containing ESP32, LoRa transceiver, sensors, and power lines.
+*   **Electronics**: Custom KiCad PCBs (utilizing the new compact 2-board shield architecture) have been successfully manufactured and we now have the physical boards! We are currently finalizing the electrical assembly on the airframe.
 *   **Simulation**: Basic PyQt-based simulation setup created for autopilot PID tuning loops.
+*   **Next Steps**: Preparing to run electronics tests to validate power distribution and signals before the first manual test flight.
+
+### PCB Previews
+
+<p align="center">
+  <img src="media/general_images/Kicad_pcbs/power.png" width="48%" alt="PCB Power Routing">
+  <img src="media/general_images/Kicad_pcbs/data.png" width="48%" alt="PCB Data Routing">
+</p>
 
 ---
 
@@ -60,13 +70,14 @@ The project is structured as follows:
 - [x] Perform isolated bench tests for each sensor to ensure accuracy and data reliability.
 
 ### Phase 2: Airframe Assembly & Avionics Integration
-- [ ] Finish assembling the main airframe skeleton from the purchased KIT.
+- [x] Finish assembling the main airframe skeleton from the purchased KIT.
 - [x] Complete custom KiCad PCB schematic (`MANTA.kicad_sch`).
-- [ ] Finalize PCB routing, trace widths for power distribution, and manufacture the board.
-- [ ] Assemble the PCB and perform physical continuity and power testing.
+- [x] Finalize PCB routing, trace widths for power distribution, and manufacture the board.
+- [x] Assemble the PCB and perform physical continuity and power testing.
 - [ ] Design and build a sturdy, custom mount for the Raspberry Pi camera module.
 - [ ] Mount avionics (ESP32, Raspberry Pi, camera, sensors) on the airframe.
 - [ ] Conduct EMI (Electromagnetic Interference) testing to ensure motors/ESCs don't disrupt the GPS or LoRa signals.
+- [ ] Execute maiden field test in manual flight mode to validate airframe aerodynamics and real-time ground station telemetry streaming.
 
 ### Phase 3: Software, Autopilot & Path-Planning
 - [ ] Integrate IMU (MPU6050) Kalman/Complementary filtering into low-level ESP32 firmware.
