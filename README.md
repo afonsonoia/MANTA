@@ -1,8 +1,16 @@
-# MANTA - Autonomous RC Plane with Camera-Based Localization
+# MANTA – An Embedded AI Platform for Vision-Based Autonomous Flight
 
 ![MANTA Project](media/general_images/main_image.png)
 
-Welcome to the **MANTA** project! The goal of this project is to design, build, and fly an autonomous RC plane capable of navigating safely in **GPS-denied environments** using camera-based visual localization. 
+**MANTA is an experimental fixed-wing UAV research platform designed to investigate embedded computer vision and autonomous navigation in GPS-denied environments.**
+
+## Why MANTA?
+
+**Rather than being a commercial autopilot, MANTA is intended as an experimental platform for developing, testing and validating embedded perception and autonomous navigation algorithms under real flight conditions.**
+
+**🚧 Current Development:** Preparing the aircraft for its first manual flight tests.
+
+> *Fun Fact: The name **MANTA** is a regional term from Madeira Island, Portugal. It refers to the local population of the Common Buzzard (*Buteo buteo rothschildi*), a resident subspecies frequently seen soaring above the island's mountains.*
 
 **Living Document:** This roadmap represents the current plan but is subject to change at any time as the project evolves, new challenges arise, or testing results dictate new priorities.
 
@@ -10,17 +18,17 @@ Welcome to the **MANTA** project! The goal of this project is to design, build, 
 
 ## Project Overview
 
-The aircraft is powered by a hybrid architecture combining a low-level microcontroller for flight stability/control and a companion computer for high-level intelligence and computer vision:
+The aircraft is powered by a hybrid architecture combining a low-level microcontroller for flight control and a companion computer for high-level intelligence and computer vision:
 
-*   **Flight Controller (ESP32)**: Handles real-time tasks including sensor data acquisition, radio control (RC) receiver channel decoding (PWM/PPM), telemetry, and servo/ESC actuator outputs (PIDs for elevator and roll stabilization).
-*   **Companion Computer (Raspberry Pi 3 A+)**: Hosts the camera and runs computer vision workloads (MobileNet feature extraction + KNN signature matching) to estimate geographical position by comparing real-time video frames with pre-compiled geo-referenced aerial database maps.
+*   **Flight Controller (ESP32)**: Handles real-time tasks including sensor data acquisition, radio control (RC) receiver channel decoding (PWM/PPM), telemetry, and servo/ESC actuator outputs (PID control loops for elevator and roll stabilization).
+*   **Companion Computer (Raspberry Pi 3 A+)**: Hosts the camera and executes lightweight computer vision pipelines for visual place recognition, estimating the aircraft's position by matching real-time imagery against a geo-referenced aerial database.
 *   **Sensor Suite**:
     *   **GPS**: Primary navigation reference (when signal is active).
     *   **IMU (MPU6050)**: Accelerometer and Gyroscope for attitude estimation.
     *   **Barometer (BMP280)**: Altitude holding and barometric tracking.
     *   **Voltage Sensor**: Real-time battery cell monitoring.
     *   **Camera**: Captures ground features for visual localization.
-*   **Custom PCBs (Shield Design)**: A custom 2-board KiCad-designed system that unites as a shield. This approach reduces manufacturing costs and results in a more compact footprint that easily fits within the airframe. It cleanly distributes power and interconnects the ESP32, Raspberry Pi, LoRa radio, sensor breakout boards, receiver, and servos. The design incorporates extensive GND copper pours around sensor zones, providing excellent thermodynamic properties and robust protection against electromagnetic interference (EMI).
+*   **Custom PCBs (Shield Design)**: A custom two-board shield architecture designed in KiCad. This approach reduces manufacturing costs and results in a more compact footprint that easily fits within the airframe. It cleanly distributes power and interconnects the ESP32, Raspberry Pi, LoRa radio, sensor breakout boards, receiver, and servos. The design incorporates extensive GND copper pours around sensor zones, providing improved heat dissipation and reduced electromagnetic interference around sensitive electronics.
 
 ---
 
@@ -47,8 +55,8 @@ The project is structured as follows:
 ## Current Project Status
 
 *   **Low-Level Firmware**: ESP32 test sketch successfully integrates PWM receiver input reading, deadband smoothing, battery percentage estimation, and servo/ESC command output.
-*   **Visual Navigation**: Python POCs demonstrate feature extraction using lightweight MobileNet structures combined with a KNN classifier to predict coordinates based on matching signatures.
-*   **Electronics**: Custom KiCad PCBs (utilizing the new compact 2-board shield architecture) have been successfully manufactured and we now have the physical boards! We are currently finalizing the electrical assembly on the airframe.
+*   **Visual Navigation**: Python POCs demonstrate lightweight deep feature extraction combined with visual place recognition to predict coordinates based on matching signatures.
+*   **Electronics**: The custom PCBs (utilizing a compact 2-board shield architecture) have been manufactured and assembled. We are currently finalizing the electrical integration on the airframe.
 *   **Simulation**: Basic PyQt-based simulation setup created for autopilot PID tuning loops.
 *   **Next Steps**: Preparing to run electronics tests to validate power distribution and signals before the first manual test flight.
 
@@ -66,11 +74,11 @@ The project is structured as follows:
 ### Phase 1: Hardware Proof-of-Concepts (POC)
 - [x] Establish ESP32 communications with peripheral sensors (BMP280, LoRa, Voltage sensor).
 - [x] Implement RC receiver pulse width reading and telemetry logs.
-- [x] Set up MobileNet+KNN visual matching tests using local spatial imagery databases.
+- [x] Set up lightweight visual place recognition experiments using aerial imagery databases.
 - [x] Perform isolated bench tests for each sensor to ensure accuracy and data reliability.
 
 ### Phase 2: Airframe Assembly & Avionics Integration
-- [x] Finish assembling the main airframe skeleton from the purchased KIT.
+- [x] Finish assembling the main airframe skeleton from the purchased kit.
 - [x] Complete custom KiCad PCB schematic (`MANTA.kicad_sch`).
 - [x] Finalize PCB routing, trace widths for power distribution, and manufacture the board.
 - [x] Assemble the PCB and perform physical continuity and power testing.
@@ -92,16 +100,10 @@ The project is structured as follows:
 - [ ] Enhance Virtual FPV by streaming additional camera/sensor data to realistically detect and display obstacles like trees.
 - [ ] Conduct field tests to evaluate LoRa telemetry maximum range, packet loss, and Virtual FPV rendering latency.
 
-### Phase 5: Vision-Based Visual Odometry (GPS-Denied)
-- [ ] Optimize the MobileNet feature extraction pipeline on Raspberry Pi 3 A+.
-- [ ] Establish offline local WMS map compilation and database caching.
-- [ ] Capture raw aerial video datasets during manual flights to validate and train the CV model offline.
-- [ ] Develop failsafe logic to transition autopilot navigation to visual tracking upon GPS signal loss.
-
-### Phase 6: Iterative Flight Testing & Autonomous Validation
-- [ ] Perform manual Line-of-Sight (LOS) flight tests to evaluate the Center of Gravity (CG) and basic aerodynamics.
-- [ ] Conduct tethered/ground vibration testing to calibrate sensors under heavy motor load.
-- [ ] Run hardware-in-the-loop (HIL) simulations using logged manual flight data to refine the autopilot.
-- [ ] Execute semi-autonomous flights (LoRa waypoint commands) keeping manual RC override as a safety net.
-- [ ] Conduct the first fully autonomous flight trials relying solely on Vision-Based Odometry (GPS-denied simulation).
-- [ ] Continuously review flight logs after each test to fine-tune PIDs, computer vision thresholds, and path-planning behaviors.
+### Long-Term Research Directions
+- Visual-Inertial State Estimation
+- Lightweight onboard perception
+- Embedded neural network optimization
+- Sensor fusion for robust navigation
+- Dataset acquisition and evaluation
+- Fully autonomous visual flight in GNSS-degraded environments
