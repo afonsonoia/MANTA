@@ -2,7 +2,7 @@
 
 ![MANTA Project](media/general_images/main_image.png)
 
-Welcome to the **MANTA** (BlueSky) project! The goal of this project is to design, build, and fly an autonomous RC plane capable of navigating safely in **GPS-denied environments** using camera-based visual localization. 
+Welcome to the **MANTA** project! The goal of this project is to design, build, and fly an autonomous RC plane capable of navigating safely in **GPS-denied environments** using camera-based visual localization. 
 
 **Living Document:** This roadmap represents the current plan but is subject to change at any time as the project evolves, new challenges arise, or testing results dictate new priorities.
 
