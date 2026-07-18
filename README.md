@@ -85,6 +85,7 @@ The project is structured as follows:
 - [ ] Design and build a sturdy, custom mount for the Raspberry Pi camera module.
 - [ ] Mount avionics (ESP32, Raspberry Pi, camera, sensors) on the airframe.
 - [ ] Conduct EMI (Electromagnetic Interference) testing to ensure motors/ESCs don't disrupt the GPS or LoRa signals.
+- [ ] Experimentally characterize the battery discharge curve to accurately estimate the remaining battery percentage from the measured voltage.
 - [ ] Execute maiden field test in manual flight mode to validate airframe aerodynamics and real-time ground station telemetry streaming.
 
 ### Phase 3: Software, Autopilot & Path-Planning
