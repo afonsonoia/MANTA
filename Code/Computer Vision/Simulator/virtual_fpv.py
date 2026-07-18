@@ -7,7 +7,7 @@ from PIL import Image
 import io
 
 def deg2num(lat_deg, lon_deg, zoom):
-    """Converte latitude e longitude para coordenadas de Tiles (Mapzen/OSM)"""
+    """Convert latitude and longitude to Tile coordinates"""
     lat_rad = math.radians(lat_deg)
     n = 2.0 ** zoom
     xtile = int((lon_deg + 180.0) / 360.0 * n)
@@ -15,21 +15,21 @@ def deg2num(lat_deg, lon_deg, zoom):
     return (xtile, ytile)
 
 def fetch_elevation(lat, lon, zoom=14):
-    """Descarrega dados reais de elevação (DEM) da Ilha da Madeira via AWS Open Data"""
-    print(f"A descarregar dados de topografia para as coordenadas [{lat}, {lon}]...")
+    """Download elevation data (DEM)"""
+    print(f"Downloading topography data for [{lat}, {lon}]...")
     x, y = deg2num(lat, lon, zoom)
-    # Mapzen Terrain Tiles na Amazon S3 (Acesso Público Gratuito)
+    
+    # Mapzen Terrain Tiles on Amazon S3
     url = f"https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{zoom}/{x}/{y}.png"
     
     resp = requests.get(url)
     if resp.status_code != 200:
-        raise Exception(f"Falha ao descarregar o mapa: HTTP {resp.status_code}")
+        raise Exception(f"Failed to download map: HTTP {resp.status_code}")
     
     img = Image.open(io.BytesIO(resp.content))
     img_arr = np.array(img)
     
-    # Descodificar o formato Terrarium para altitude real em metros
-    # Fórmula: (Red * 256 + Green + Blue / 256) - 32768
+    # Decode Terrarium format to real altitude in meters
     R = img_arr[:,:,0].astype(np.float64)
     G = img_arr[:,:,1].astype(np.float64)
     B = img_arr[:,:,2].astype(np.float64)
@@ -37,52 +37,44 @@ def fetch_elevation(lat, lon, zoom=14):
     return elevation
 
 def main():
-    # Coordenadas: Chão das Feiteiras, Ilha da Madeira (Alta Montanha)
+    # Coordinates: Chão das Feiteiras, Madeira
     lat = 32.723
     lon = -16.892
     
     try:
         elev_data = fetch_elevation(lat, lon, zoom=14)
     except Exception as e:
-        print(f"Erro: {e}")
+        print(f"Error: {e}")
         return
 
-    # Reduzir a resolução da malha para o matplotlib não arrastar o PC
-    # Vamos usar apenas 1 em cada 3 pontos (escala a grelha de 256 para ~85)
+    # Reduce mesh resolution
     skip = 3
     Z = elev_data[::skip, ::skip]
     x_len, y_len = Z.shape
     X, Y = np.meshgrid(np.arange(x_len), np.arange(y_len))
 
-    print(f"Mapa carregado. Altitude mínima: {np.min(Z):.0f}m, máxima: {np.max(Z):.0f}m.")
-    print("A gerar o Virtual FPV 3D...")
+    print(f"Map loaded. Min altitude: {np.min(Z):.0f}m, Max: {np.max(Z):.0f}m.")
+    print("Generating Virtual FPV 3D...")
 
-    # Configurar o gráfico 3D
-    plt.style.use('dark_background') # Fica com aspeto mais "Ground Station"
+    plt.style.use('dark_background')
     fig = plt.figure(figsize=(10, 7))
     ax = fig.add_subplot(111, projection='3d')
     
-    # Renderizar as montanhas com paleta de cores 'terrain'
     surf = ax.plot_surface(X, Y, Z, cmap='terrain', edgecolor='none', alpha=0.9)
     
-    # Estilizar a janela
-    ax.set_title("MANTA - Virtual FPV Ground Station\nLocal: Chão das Feiteiras (Madeira)", fontsize=14, color='white')
-    ax.set_zlim(np.min(Z) - 100, np.max(Z) + 500) # Espaço no ar para "voar"
-    ax.axis('off') # Esconder os eixos normais X Y Z para maior imersão
+    ax.set_title("MANTA - Virtual FPV Ground Station\nLocation: Chão das Feiteiras (Madeira)", fontsize=14, color='white')
+    ax.set_zlim(np.min(Z) - 100, np.max(Z) + 500)
+    ax.axis('off')
     
-    # Função responsável por animar a câmara
     def update_camera(frame):
-        # Simulamos a atitude do avião:
-        # azim = Rotação do avião no vale (Yaw)
-        # elev = Inclinação (Pitch)
+        # Simulate aircraft attitude (Yaw and Pitch)
         azim = 30 + frame * 0.4 
-        pitch = 30 + 15 * math.sin(frame * 0.05) # Oscila o nariz do avião suavemente
+        pitch = 30 + 15 * math.sin(frame * 0.05)
         
         ax.view_init(elev=pitch, azim=azim)
         return fig,
 
-    # Criar a animação (simulação de voo a ~20 FPS)
-    print("A iniciar simulação de voo. Podes fechar a janela para parar.")
+    print("Starting flight simulation. Close the window to stop.")
     ani = animation.FuncAnimation(fig, update_camera, frames=500, interval=50, blit=False)
     
     plt.show()

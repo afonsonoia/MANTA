@@ -7,54 +7,52 @@ const uint16_t port = 5005;
 
 WiFiClient client;
 
-void conectarAoServidor() {
-  Serial.print("A tentar ligar ao servidor TCP...");
-  // Tenta ligar. Se não conseguir, espera 2 segundos e tenta de novo
+void connectToServer() {
+  Serial.print("Connecting to TCP server...");
   while (!client.connect(host, port)) {
     Serial.print(".");
     delay(2000);
   }
-  Serial.println("\nConectado ao servidor!");
+  Serial.println("\nConnected to server!");
 }
 
 void setup() {
   Serial.begin(115200);
   WiFi.begin(ssid, password);
 
-  Serial.print("Conectando ao WiFi");
+  Serial.print("Connecting to WiFi");
   while (WiFi.status() != WL_CONNECTED) {
     delay(500);
     Serial.print(".");
   }
-  Serial.println("\nWiFi conectado!");
+  Serial.println("\nWiFi connected!");
 
-  conectarAoServidor();
+  connectToServer();
 }
 
 void loop() {
-  // VERIFICAÇÃO CRÍTICA: Se a ligação caiu, tenta ligar de novo
+  // CRITICAL: Reconnect if connection is lost
   if (!client.connected()) {
-    Serial.println("Ligação perdida!");
-    conectarAoServidor();
+    Serial.println("Connection lost!");
+    connectToServer();
   }
 
-  // Envia uma mensagem com \n no fim
-  Serial.println("A enviar dados...");
-  client.println("Olá do ESP32 via TCP!"); // println já adiciona o \n automático
+  // Send data
+  Serial.println("Sending data...");
+  client.println("Hello from ESP32 via TCP!"); 
 
-  // Lê a resposta do PC
-  // Usamos um while pequeno para dar tempo ao PC de responder
+  // Wait for response
   unsigned long timeout = millis();
   while (client.available() == 0) {
-    if (millis() - timeout > 1000) { // Espera no máximo 1 segundo
-      Serial.println("Sem resposta do servidor (Timeout)");
+    if (millis() - timeout > 1000) { 
+      Serial.println("No response from server (Timeout)");
       break;
     }
   }
 
   while (client.available()) {
-    String resposta = client.readStringUntil('\n');
-    Serial.println("Resposta do PC: " + resposta);
+    String response = client.readStringUntil('\n');
+    Serial.println("Server response: " + response);
   }
 
   delay(5000); 

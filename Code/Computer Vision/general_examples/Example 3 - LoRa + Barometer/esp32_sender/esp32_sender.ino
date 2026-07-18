@@ -3,7 +3,7 @@
 #include <Wire.h>
 #include <Adafruit_BMP280.h>
 
-// Pinos LoRa no ESP32
+// ESP32 LoRa pins
 #define SCK 18
 #define MISO 19
 #define MOSI 23
@@ -11,42 +11,39 @@
 #define RST 14
 #define DIO0 2
 
-Adafruit_BMP280 bmp; // Sensor I2C
+Adafruit_BMP280 bmp; // I2C Sensor
 
 void setup() {
   Serial.begin(115200);
 
-  // 1. Iniciar Sensor BMP280 (Pinos 21 e 22)
+  // 1. Start BMP280 Sensor (Pins 21 and 22)
   Wire.begin(21, 22);
   if (!bmp.begin(0x77)) {
-    Serial.println("Erro: Sensor BMP280 nao encontrado!");
+    Serial.println("Error: BMP280 sensor not found!");
     while (1);
   }
 
-  // 2. Iniciar LoRa
+  // 2. Start LoRa
   LoRa.setPins(SS, RST, DIO0);
   if (!LoRa.begin(433E6)) {
-    Serial.println("Erro: Falha ao iniciar LoRa!");
+    Serial.println("Error: Failed to start LoRa!");
     while (1);
   }
 
-  Serial.println("Emissor ESP32 configurado!");
+  Serial.println("ESP32 Sender configured!");
 }
 
 void loop() {
-  // Ler dados do sensor
   float temp = bmp.readTemperature();
   float press = bmp.readPressure() / 100.0F;
 
-  // Criar mensagem
   String msg = "T:" + String(temp) + "C P:" + String(press) + "hPa";
 
-  Serial.println("Enviando: " + msg);
+  Serial.println("Sending: " + msg);
 
-  // Enviar via LoRa
   LoRa.beginPacket();
   LoRa.print(msg);
   LoRa.endPacket();
 
-  delay(5000); // Espera 5 segundos
+  delay(5000); 
 }
