@@ -45,6 +45,7 @@ build/
 _autosave-*
 fp-info-cache
 *.net
+*.lck
 
 # =========================
 # Datasets & Large Media
