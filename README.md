@@ -38,6 +38,7 @@ The project is structured as follows:
 
 ```
 ├── Code/
+│   ├── Battery_Monitor/            # Raw battery voltage sensor data logger & ESC throttle control GUI
 │   └── Computer Vision/
 │       ├── demos/
 │       │   └── MobileNet + KNN/        # Visual localization, image recognition & database loaders
@@ -55,10 +56,11 @@ The project is structured as follows:
 ## Current Project Status
 
 *   **Low-Level Firmware**: ESP32 test sketch successfully integrates PWM receiver input reading, deadband smoothing, battery percentage estimation, and servo/ESC command output.
+*   **Voltage Sensor Calibration**: Experimentally determined the conversion function for raw ADC voltage sensor data in the ESP32 firmware, enabling accurate battery voltage measurements.
 *   **Visual Navigation**: Python POCs demonstrate lightweight deep feature extraction combined with visual place recognition to predict coordinates based on matching signatures.
 *   **Electronics**: The custom PCBs (utilizing a compact 2-board shield architecture) have been manufactured and assembled. We are currently finalizing the electrical integration on the airframe.
 *   **Simulation**: Basic PyQt-based simulation setup created for autopilot PID tuning loops.
-*   **Next Steps**: Preparing to run electronics tests to validate power distribution and signals before the first manual test flight.
+*   **Next Steps**: Perform load testing with the ESC/motor to study the actual battery discharge curve now that accurate voltage readings are established.
 
 ### PCB Previews
 
@@ -82,10 +84,11 @@ The project is structured as follows:
 - [x] Complete custom KiCad PCB schematic (`MANTA.kicad_sch`).
 - [x] Finalize PCB routing, trace widths for power distribution, and manufacture the board.
 - [x] Assemble the PCB and perform physical continuity and power testing.
+- [x] Experimentally calibrate the raw voltage sensor conversion function to obtain accurate voltage readings from raw ADC data.
 - [ ] Design and build a sturdy, custom mount for the Raspberry Pi camera module.
 - [ ] Mount avionics (ESP32, Raspberry Pi, camera, sensors) on the airframe.
 - [ ] Conduct EMI (Electromagnetic Interference) testing to ensure motors/ESCs don't disrupt the GPS or LoRa signals.
-- [ ] Experimentally characterize the battery discharge curve to accurately estimate the remaining battery percentage from the measured voltage.
+- [ ] Experimentally study and map the battery discharge curve under motor load using the calibrated voltage sensor.
 - [ ] Execute maiden field test in manual flight mode to validate airframe aerodynamics and real-time ground station telemetry streaming.
 
 ### Phase 3: Software, Autopilot & Path-Planning
