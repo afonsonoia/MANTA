@@ -61,7 +61,7 @@ The project is structured as follows:
 *   **Visual Navigation**: Python POCs demonstrate lightweight deep feature extraction combined with visual place recognition to predict coordinates based on matching signatures.
 *   **Electronics**: The custom PCBs (utilizing a compact 2-board shield architecture) have been manufactured and assembled. We are currently finalizing the electrical integration on the airframe.
 *   **Simulation**: Basic PyQt-based simulation setup created for autopilot PID tuning loops.
-*   **Next Steps**: Perform load testing with the ESC/motor to study the actual battery discharge curve now that accurate voltage readings are established.
+*   **Next Steps**: Complete avionics mounting and prepare for maiden manual flight tests.
 
 ### PCB Previews
 
@@ -87,10 +87,10 @@ The project is structured as follows:
 - [x] Finalize PCB routing, trace widths for power distribution, and manufacture the board.
 - [x] Assemble the PCB and perform physical continuity and power testing.
 - [x] Experimentally calibrate the raw voltage sensor conversion function to obtain accurate voltage readings from raw ADC data.
+- [x] Experimentally study and map the battery discharge curve under motor load using the calibrated voltage sensor.
 - [ ] Design and build a sturdy, custom mount for the Raspberry Pi camera module.
 - [ ] Mount avionics (ESP32, Raspberry Pi, camera, sensors) on the airframe.
 - [ ] Conduct EMI (Electromagnetic Interference) testing to ensure motors/ESCs don't disrupt the GPS or LoRa signals.
-- [ ] Experimentally study and map the battery discharge curve under motor load using the calibrated voltage sensor.
 - [ ] Execute maiden field test in manual flight mode to validate airframe aerodynamics and real-time ground station telemetry streaming.
 
 ### Phase 3: Software, Autopilot & Path-Planning
