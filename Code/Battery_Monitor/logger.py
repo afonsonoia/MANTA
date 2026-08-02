@@ -14,6 +14,13 @@ EXCEL_FILE = 'registo_bateria.xlsx'
 MAX_PLOT_POINTS = 100
 BATTERY_DIVIDER_RATIO = 4.84  # Voltage divider factor from battery_monitor.ino (4.84:1 ratio)
 
+def calculate_battery_voltage(raw_adc):
+    """Calculates battery voltage matching the ESP32 polynomial equation:
+       voltage = -0.0000009 * (raw_adc^2) + 0.0089 * raw_adc - 5.8868
+    """
+    voltage = -0.0000009 * (raw_adc ** 2) + 0.0089 * raw_adc - 5.8868
+    return max(0.0, voltage)
+
 # Global state
 current_throttle_pulse = 1000  # Default off/armed pulse (1000us)
 last_sent_pulse = None
@@ -66,10 +73,10 @@ def update_live_plot(fig, ax, line, text_info, timestamps, raw_adcs, throttle_sl
     latest_adc = raw_adcs[-1]
     latest_t = timestamps[-1]
     pin_v = (latest_adc * 3.3) / 4095.0
-    est_v = pin_v * BATTERY_DIVIDER_RATIO
+    est_v = calculate_battery_voltage(latest_adc)
 
-    # Low Voltage Cutoff safety check on raw ADC (approx <= 2500 counts / 2.0V pin voltage -> 12.0V battery)
-    if latest_adc <= 2500.0 and latest_adc > 0.0:
+    # Low Voltage Cutoff safety check (<= 12.50V matching ESP32 safety threshold)
+    if est_v <= 12.50 and latest_adc > 0.0:
         low_voltage_cutoff_active = True
         if throttle_slider and throttle_slider.val > 1000:
             throttle_slider.set_val(1000)
@@ -79,7 +86,7 @@ def update_live_plot(fig, ax, line, text_info, timestamps, raw_adcs, throttle_sl
     
     if low_voltage_cutoff_active:
         text_info.set_text(
-            f"CRITICAL: RAW SENSOR <= 2500 (LOW VOLTAGE)! THROTTLE BLOCKED FOR SAFETY!\nElapsed: {latest_t:.1f}s  |  Raw ADC: {latest_adc:.1f}  |  Pin: {pin_v:.2f}V  |  Est Batt: {est_v:.2f}V"
+            f"CRITICAL: BATTERY VOLTAGE <= 12.50V (LOW VOLTAGE)! THROTTLE BLOCKED FOR SAFETY!\nElapsed: {latest_t:.1f}s  |  Raw ADC: {latest_adc:.1f}  |  Pin: {pin_v:.2f}V  |  Est Batt: {est_v:.2f}V"
         )
         text_info.set_bbox(dict(boxstyle='round,pad=0.5', facecolor='#660000', alpha=0.9, edgecolor='#FF0000'))
     else:
@@ -106,45 +113,21 @@ def main():
     raw_adcs = []
     start_time = None
 
-    # Load existing data from Excel if file exists
+    # Delete previous Excel log file if it exists, creating a fresh log every run
     if os.path.exists(EXCEL_FILE):
-        wb = openpyxl.load_workbook(EXCEL_FILE)
-        ws = wb.active
-        # Ensure header format has 5 columns: Record Number, Elapsed Time (s), Raw Sensor (ADC 0-4095), Raw Pin Voltage (V), Estimated Voltage (V)
-        ws.cell(row=1, column=1, value="Record Number")
-        ws.cell(row=1, column=2, value="Elapsed Time (s)")
-        ws.cell(row=1, column=3, value="Raw Sensor (ADC 0-4095)")
-        ws.cell(row=1, column=4, value="Raw Pin Voltage (V)")
-        ws.cell(row=1, column=5, value="Estimated Voltage (V)")
+        try:
+            os.remove(EXCEL_FILE)
+            print(f"Previous log file '{EXCEL_FILE}' deleted successfully.")
+        except Exception as e:
+            print(f"[Warning] Could not delete previous log file '{EXCEL_FILE}': {e}")
 
-        for row in ws.iter_rows(min_row=2, values_only=True):
-            if row and len(row) >= 2 and row[0] is not None:
-                try:
-                    rec_id = int(row[0])
-                    if len(row) >= 3 and row[2] is not None:
-                        t_elapsed = float(row[1])
-                        adc_val = float(row[2])
-                    else:
-                        t_elapsed = float((rec_id - 1) * 1.0)
-                        adc_val = float(row[1])
-                    records.append(rec_id)
-                    timestamps.append(t_elapsed)
-                    raw_adcs.append(adc_val)
-                except (ValueError, TypeError):
-                    pass
-        record_number = records[-1] + 1 if records else 1
-        if timestamps:
-            # Continue elapsed timing from last recorded elapsed time
-            start_time = time.time() - timestamps[-1]
-        print(f"Loaded {len(records)} existing records from '{EXCEL_FILE}'.")
-    else:
-        wb = Workbook()
-        ws = wb.active
-        ws.title = "Raw Sensor Log"
-        ws.append(["Record Number", "Elapsed Time (s)", "Raw Sensor (ADC 0-4095)", "Raw Pin Voltage (V)", "Estimated Voltage (V)"])
-        record_number = 1
-        wb.save(EXCEL_FILE)
-        print(f"Created new log file '{EXCEL_FILE}'.")
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Battery Log"
+    ws.append(["Record Number", "Elapsed Time (s)", "Raw Sensor (ADC 0-4095)", "Raw Pin Voltage (V)", "Estimated Voltage (V)"])
+    record_number = 1
+    wb.save(EXCEL_FILE)
+    print(f"Created new clean log file '{EXCEL_FILE}'.")
 
     # Initialize live Matplotlib figure with dark theme
     plt.style.use('dark_background')
@@ -244,7 +227,7 @@ def main():
                                     start_time = now
                                 elapsed_sec = round(now - start_time, 2)
                                 pin_voltage = round((raw_adc * 3.3) / 4095.0, 3)
-                                estimated_voltage = round(pin_voltage * BATTERY_DIVIDER_RATIO, 2)
+                                estimated_voltage = round(calculate_battery_voltage(raw_adc), 2)
                                 
                                 # 1. Save Data to Excel: [Record Number, Elapsed Time (s), Raw Sensor (ADC 0-4095), Raw Pin Voltage (V), Estimated Voltage (V)]
                                 ws.append([record_number, elapsed_sec, raw_adc, pin_voltage, estimated_voltage])

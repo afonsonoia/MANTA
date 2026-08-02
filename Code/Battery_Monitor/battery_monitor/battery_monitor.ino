@@ -68,7 +68,7 @@ void loop() {
       if (req.startsWith("THROTTLE:")) {
         int val = req.substring(9).toInt();
         if (lowVoltageCutoffTriggered) {
-          Serial.println("[SAFETY BLOCKED] Throttle command REJECTED because Battery Voltage <= 12.0V!");
+          Serial.println("[SAFETY BLOCKED] Throttle command REJECTED because Battery Voltage <= 12.5V!");
           currentThrottlePulse = 1000;
           myESC.writeMicroseconds(1000);
         } else if (val >= 1000 && val <= 2000) {
@@ -97,7 +97,7 @@ void loop() {
     }
     float rawInput = (float)sum / 64.0f;
     float voltageADC = (rawInput / ADC_MAX) * ADC_REFERENCE;
-    float currentBatteryVoltage = -0.0000009f * voltageADC * voltageADC + 0.0089f * voltageADC - 5.8868f;
+    float currentBatteryVoltage = -0.0000009f * rawInput * rawInput + 0.0089f * rawInput - 5.8868f;
 
     if (currentBatteryVoltage < 0.0f) currentBatteryVoltage = 0.0f;
 
@@ -105,7 +105,7 @@ void loop() {
     if (currentBatteryVoltage <= MIN_CUTOFF_VOLTAGE && currentBatteryVoltage > 0.0f) {
       if (!lowVoltageCutoffTriggered) {
         lowVoltageCutoffTriggered = true;
-        Serial.println("\n[CRITICAL SAFETY ALERT] Battery voltage <= 12.0V! LOW VOLTAGE CUTOFF TRIGGERED!");
+        Serial.println("\n[CRITICAL SAFETY ALERT] Battery voltage <= 12.5V! LOW VOLTAGE CUTOFF TRIGGERED!");
       }
       if (currentThrottlePulse != 1000) {
         currentThrottlePulse = 1000;
