@@ -63,3 +63,5 @@ datasets/
 # Scratch & Test files
 # =========================
 scratch_*.py
+registo_bateria_lora.xlsx
+compile_commands.json

@@ -57,6 +57,7 @@ The project is structured as follows:
 
 *   **Low-Level Firmware**: ESP32 test sketch successfully integrates PWM receiver input reading, deadband smoothing, battery percentage estimation, and servo/ESC command output.
 *   **Voltage Sensor Calibration**: Experimentally determined the conversion function for raw ADC voltage sensor data in the ESP32 firmware, enabling accurate battery voltage measurements.
+*   **Initial LoRa Communication**: Established initial bidirectional LoRa communication between the aircraft (MANTA ESP32) and the ground station, streaming live battery telemetry and RSSI/SNR signal metrics while receiving ESC control commands.
 *   **Visual Navigation**: Python POCs demonstrate lightweight deep feature extraction combined with visual place recognition to predict coordinates based on matching signatures.
 *   **Electronics**: The custom PCBs (utilizing a compact 2-board shield architecture) have been manufactured and assembled. We are currently finalizing the electrical integration on the airframe.
 *   **Simulation**: Basic PyQt-based simulation setup created for autopilot PID tuning loops.
@@ -76,6 +77,7 @@ The project is structured as follows:
 ### Phase 1: Hardware Proof-of-Concepts (POC)
 - [x] Establish ESP32 communications with peripheral sensors (BMP280, LoRa, Voltage sensor).
 - [x] Implement RC receiver pulse width reading and telemetry logs.
+- [x] Establish initial LoRa communication between aircraft and ground station.
 - [x] Set up lightweight visual place recognition experiments using aerial imagery databases.
 - [x] Perform isolated bench tests for each sensor to ensure accuracy and data reliability.
 
