@@ -8,7 +8,7 @@
 
 **Rather than being a commercial autopilot, MANTA is intended as an experimental platform for developing, testing and validating embedded perception and autonomous navigation algorithms under real flight conditions.**
 
-**🚧 Current Development:** Preparing the aircraft for its first manual flight tests.
+**Current Development:** Preparing the aircraft for its first manual flight tests.
 
 > *Fun Fact: The name **MANTA** is a regional term from Madeira Island, Portugal. It refers to the local population of the Common Buzzard (*Buteo buteo rothschildi*), a resident subspecies frequently seen soaring above the island's mountains.*
 
@@ -29,6 +29,7 @@ The aircraft is powered by a hybrid architecture combining a low-level microcont
     *   **Voltage Sensor**: Real-time battery cell monitoring.
     *   **Camera**: Captures ground features for visual localization.
 *   **Custom PCBs (Shield Design)**: A custom two-board shield architecture designed in KiCad. This approach reduces manufacturing costs and results in a more compact footprint that easily fits within the airframe. It cleanly distributes power and interconnects the ESP32, Raspberry Pi, LoRa radio, sensor breakout boards, receiver, and servos. The design incorporates extensive GND copper pours around sensor zones, providing improved heat dissipation and reduced electromagnetic interference around sensitive electronics.
+*   **Ground Station Receiver**: Dedicated ground hardware built with an ESP32 microcontroller, LoRa transceiver module, and an audible piezo buzzer. It streams telemetry to the PC Mission Planner application in real time while sounding acoustic warnings during critical safety events or link loss.
 
 ---
 
@@ -45,10 +46,12 @@ The project is structured as follows:
 │       ├── general_examples/           # ESP32 POCs (LoRa, Barometer, Receiver, Throttle/Voltage telemetry)
 │       ├── Simulator/                  # Python-based flight simulator and autopilot PID tuning GUI
 │       └── Test_2/Test_10_02_2026/     # Main low-level ESP32 test sketch (servo, battery, receiver input)
-└── Electronics/
-    ├── MANTA.kicad_sch                 # Custom PCB Schematic
-    ├── MANTA.kicad_pcb                 # Custom PCB Layout
-    └── MANTA.kicad_pro                 # KiCad Project configuration
+├── Electronics/
+│   ├── MANTA.kicad_sch                 # Custom PCB Schematic
+│   ├── MANTA.kicad_pcb                 # Custom PCB Layout
+│   └── MANTA.kicad_pro                 # KiCad Project configuration
+└── media/
+    └── general_images/                 # Platform banner, physical hardware & PCB layout previews
 ```
 
 ---
@@ -63,12 +66,28 @@ The project is structured as follows:
 *   **Simulation**: Basic PyQt-based simulation setup created for autopilot PID tuning loops.
 *   **Next Steps**: Complete avionics mounting and prepare for maiden manual flight tests.
 
-### PCB Previews
+### Custom Manufactured PCBs
+
+<p align="center">
+  <img src="media/general_images/manufactured_pcbs.jpg" width="100%" alt="Manufactured Physical PCBs">
+</p>
 
 <p align="center">
   <img src="media/general_images/Kicad_pcbs/power.png" width="48%" alt="PCB Power Routing">
   <img src="media/general_images/Kicad_pcbs/data.png" width="48%" alt="PCB Data Routing">
+  <br>
+  <em>KiCad PCB Layouts — Power Board & Data Board</em>
 </p>
+
+### Ground Station Hardware Prototype
+
+<p align="center">
+  <img src="media/general_images/ground_station_hardware.jpg" width="100%" alt="Ground Station Hardware Prototype">
+</p>
+
+The Ground Station hardware acts as the physical telemetry link between the aircraft and ground operations:
+* **ESP32 & LoRa Bridge**: Captures live wireless telemetry packets (battery state, RSSI/SNR signal levels, sensor telemetry) sent from the aircraft and streams them in real time to the PC Mission Planner software (`MANTA_MISSION_PLANNER.py`).
+* **Acoustic Warning System**: Features an integrated piezo buzzer programmed to emit loud audio alerts (beeps) during critical events, low battery states, or sudden signal loss, immediately warning the pilot of emergencies without requiring constant monitor surveillance.
 
 ---
 
