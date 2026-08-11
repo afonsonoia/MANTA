@@ -3,26 +3,61 @@
 
 #include <Arduino.h>
 
-// Wi-Fi Access Point Configuration
-constexpr char WIFI_SSID[] = "ESP32_Battery_Monitor";
-constexpr uint16_t SERVER_PORT = 5005;
-
 // Hardware Pin Configuration
 constexpr int PIN_BATTERY = 36; // ESP32 Pin VP / GPIO36
 constexpr int PIN_ESC = 25;     // ESC Control Pin D25
+
+// RC Receiver Input Pins
+constexpr int PIN_RC_CH1 = 39; // VIN / VN (GPIO39)
+constexpr int PIN_RC_CH2 = 34; // D34 (GPIO34)
+constexpr int PIN_RC_CH3 = 35; // D35 (GPIO35)
+constexpr int PIN_RC_CH4 = 32; // D32 (GPIO32)
+constexpr int PIN_RC_CH5 = 33; // D33 (GPIO33)
+
+// Servo Output Pins (V-Tail Airframe)
+constexpr int PIN_SERVO_BR = 13; // Back Right / Traseira Direita (GPIO13)
+constexpr int PIN_SERVO_BL = 14; // Back Left / Traseira Esquerda (GPIO14)
+constexpr int PIN_SERVO_FR = 27; // Front Right / Frontal Direita (GPIO27)
+constexpr int PIN_SERVO_FL = 26; // Front Left / Frontal Esquerda (GPIO26)
+
+// Control System Hysteresis & Thermal Protection Constants
+constexpr uint8_t DEFAULT_RC_MARGIN_DEADBAND =
+    20; // Default Hysteresis threshold in us (ignore PWM jitter < 20us)
+constexpr uint16_t DEFAULT_SERVO_MIN_UPDATE_INTERVAL_MS =
+    67; // Default 67ms interval between updates per servo (15 Hz)
+constexpr unsigned long SERVO_KEEPALIVE_INTERVAL_MS =
+    1000; // 1.0s (1000ms) keep-alive update heartbeat
+
+// Servo Rotation Angle Limits & Conversion Factors (Default +/-30 degrees)
+constexpr float US_PER_DEGREE = 11.11f;                 // ~11.11us per degree (1000us total span / 90 deg)
+constexpr uint8_t DEFAULT_SERVO_MAX_ANGLE_DEG = 30;     // Default +/- 30 degrees rotation limit (1167us - 1833us)
+
+
+
+// MPU6050 I2C Pin Configuration
+constexpr int PIN_SDA = 21; // MPU6050 SDA Pin D21
+constexpr int PIN_SCL = 22; // MPU6050 SCL Pin D22
+
+// GPS UART Pin Configuration
+// GPIO3 (RX0) / GPIO1 (TX0) — shared with USB Serial.
+// GPS cable must be disconnected when flashing via USB.
+// In flight (USB disconnected) GPIO3/1 are free for GPS NMEA at 9600 baud.
+constexpr int GPS_RX_PIN = 3;   // GPIO3 / RX0
+constexpr int GPS_TX_PIN = 1;   // GPIO1 / TX0
+constexpr long GPS_BAUD = 9600; // Standard NMEA GPS Baud Rate (9600)
 
 // LoRa Pin Configuration (VSPI & Control)
 constexpr int LORA_MOSI = 23;
 constexpr int LORA_MISO = 19;
 constexpr int LORA_SCK = 18;
 constexpr int LORA_CS = 5;
-constexpr int LORA_RST = 14;
+constexpr int LORA_RST = -1;  // No dedicated RST pin! GPIO14 = PIN_SERVO_BL conflict avoided
 constexpr int LORA_DIO0 = 4;
 
 // LoRa Short-Distance Communication Parameters
 constexpr long LORA_BAND = 433E6; // Frequency: 433 MHz (433E6)
 constexpr int LORA_TX_POWER = 17; // 17 dBm
-constexpr int LORA_SF = 7;      // Spreading Factor 7 (fastest & lowest latency)
+constexpr int LORA_SF = 8;      // Spreading Factor 8 (Optimal balance: +3dB sensitivity gain, high range & 4Hz 55ms airtime)
 constexpr long LORA_BW = 125E3; // Bandwidth 125 kHz
 constexpr int LORA_CR = 5;      // Coding rate 4/5
 constexpr uint8_t LORA_SYNC_WORD = 0x12; // Matching LoRa Sync Word
@@ -32,18 +67,34 @@ constexpr float BATTERY_DIVIDER_RATIO =
     4.84f; // HiLetgo 0–25V Voltage Sensor (4.84:1)
 constexpr float ADC_REFERENCE = 3.3f;
 constexpr float ADC_MAX = 4095.0f;
-constexpr float MIN_CUTOFF_VOLTAGE =
-    12.50f; // Safety threshold (V) matching battery monitor
+constexpr float ABSOLUTE_MIN_CUTOFF_VOLTAGE =
+    12.00f; // Absolute hard safety cutoff floor (12.0V)
+constexpr float DEFAULT_CUTOFF_VOLTAGE =
+    12.50f; // Default threshold until updated by Ground Station
 
+// High Frequency Sampling & Moving Average Filter Parameters
 constexpr unsigned long LOGGING_INTERVAL_MS =
-    10000; // 10s telemetry broadcast interval for live graphing
-constexpr unsigned long SAMPLE_INTERVAL_MS =
-    100; // Uniform sampling every 100ms across the 10s window (100 samples/log)
-constexpr int ADC_OVERSAMPLE_PER_TICK =
-    8; // 8 burst readings per sample tick for high-frequency noise filtering
+    250; // 0.25s (250ms = 4 Hz) LoRa telemetry broadcast interval in flight mode
+constexpr unsigned long CALIB_LOGGING_INTERVAL_MS =
+    2000; // 2.00s (2000ms = 0.5 Hz) LoRa telemetry broadcast interval in calibration mode (CH5 > 1900)
 
-// ESC Throttle Limits
+constexpr unsigned long SAMPLE_INTERVAL_MS =
+    10; // High frequency IMU sampling every 10ms (100 Hz sampling)
+constexpr int MA_WINDOW_SIZE =
+    15; // Moving average filter window size (15 samples @ 250Hz)
+constexpr int ADC_OVERSAMPLE_PER_TICK =
+    8; // 8 burst readings per sample tick for ADC noise filtering
+
+// ESC Throttle Limits & Linear Affine Scaling Parameters
 constexpr int THROTTLE_MIN_PULSE = 1000; // us (Armed / Off)
-constexpr int THROTTLE_MAX_PULSE = 2000; // us (Full throttle)
+constexpr int THROTTLE_MAX_PULSE = 2000; // us (Full throttle hardware limit)
+
+// Throttle Transmitter Input Range & Scaled Output Range (Capped at 1800us)
+constexpr int THROTTLE_INPUT_MIN_US = 1000; // Expected transmitter stick bottom
+constexpr int THROTTLE_INPUT_MAX_US = 2000; // Expected transmitter stick top
+constexpr int THROTTLE_OUTPUT_MIN_US =
+    1000; // Capped ESC output bottom (1000us)
+constexpr int THROTTLE_OUTPUT_MAX_US =
+    1800; // Capped ESC output top (1800us max cap)
 
 #endif // CONFIG_H

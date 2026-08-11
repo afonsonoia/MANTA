@@ -4,6 +4,7 @@
 static bool lowVoltageCutoffTriggered = false;
 static double accumulatedAdcSum = 0.0;
 static long sampleCount = 0;
+static float configuredCutoffVoltage = DEFAULT_CUTOFF_VOLTAGE;
 
 void initBatterySensor() {
   pinMode(PIN_BATTERY, INPUT);
@@ -51,13 +52,32 @@ float calculateBatteryVoltage(float rawInput) {
   return voltage;
 }
 
+void setCutoffThreshold(float targetVoltage) {
+  if (targetVoltage < ABSOLUTE_MIN_CUTOFF_VOLTAGE) {
+    targetVoltage = ABSOLUTE_MIN_CUTOFF_VOLTAGE;
+  }
+  if (configuredCutoffVoltage != targetVoltage) {
+    float oldVal = configuredCutoffVoltage;
+    configuredCutoffVoltage = targetVoltage;
+    Serial.printf("[CONFIG] Changed variable CUTOFF_VOLTAGE: [%.2f V] -> [%.2f V]\n", oldVal, configuredCutoffVoltage);
+  }
+}
+
+float getEffectiveCutoffThreshold() {
+  return max(ABSOLUTE_MIN_CUTOFF_VOLTAGE, configuredCutoffVoltage);
+}
+
 bool isLowVoltageCutoffTriggered() { return lowVoltageCutoffTriggered; }
 
 bool checkLowVoltageSafety(float currentVoltage) {
-  if (currentVoltage <= MIN_CUTOFF_VOLTAGE && currentVoltage > 0.0f) {
+  float effectiveCutoff = getEffectiveCutoffThreshold();
+  if (currentVoltage <= effectiveCutoff && currentVoltage > 0.0f) {
     if (!lowVoltageCutoffTriggered) {
       lowVoltageCutoffTriggered = true;
     }
+  } else if (currentVoltage > (effectiveCutoff + 0.5f)) {
+    // Voltage recovered (e.g. fresh battery connected): reset cutoff trigger
+    lowVoltageCutoffTriggered = false;
   }
   return lowVoltageCutoffTriggered;
 }
