@@ -1,4 +1,5 @@
 #include <Arduino.h>
+#include <WiFi.h>
 #include <SPI.h>
 #include <LoRa.h>
 #include "config.h"
@@ -51,7 +52,18 @@ void updateBuzzer() {
 }
 
 void setup() {
+    // 1. Startup power stabilization delay (150ms) to eliminate USB inrush current spikes
+    delay(150);
+
+    // Disable unused Wi-Fi & Bluetooth radios to minimize power consumption
+    WiFi.mode(WIFI_OFF);
+    btStop();
+
     Serial.begin(115200);
+
+    // Explicitly configure Buzzer pin LOW before PWM attach to avoid transient boot current spikes
+    pinMode(BUZZER_PIN, OUTPUT);
+    digitalWrite(BUZZER_PIN, LOW);
 
     #if ESP_ARDUINO_VERSION >= ESP_ARDUINO_VERSION_VAL(3, 0, 0)
     ledcAttach(BUZZER_PIN, BUZZER_FREQ, PWM_RESOLUTION);
@@ -80,7 +92,8 @@ void setup() {
         delay(1000);
     }
 
-    LoRa.setTxPower(LORA_TX_POWER);
+    // Set initial LoRa transmit power (14 dBm) - reduced to prevent high USB power spikes
+    LoRa.setTxPower(14);
     LoRa.setSpreadingFactor(LORA_SF);
     LoRa.setSignalBandwidth(LORA_BW);
     LoRa.setCodingRate4(LORA_CR);
@@ -96,23 +109,32 @@ void loop() {
 
     // 1. Check for incoming LoRa packets from MANTA
     int packetSize = LoRa.parsePacket();
-    if (packetSize) {
-        String receivedData = "";
-        while (LoRa.available()) {
-            receivedData += (char)LoRa.read();
+    if (packetSize > 0) {
+        uint8_t packetBuffer[128];
+        int bytesRead = 0;
+        while (LoRa.available() && bytesRead < 128) {
+            packetBuffer[bytesRead++] = (uint8_t)LoRa.read();
         }
-        receivedData.trim();
 
         int rssi = LoRa.packetRssi();
         float snr = LoRa.packetSnr();
 
-        Serial.print("[LORA RX 433MHz] ");
-        Serial.print(receivedData);
-        Serial.print(" | RSSI: ");
-        Serial.print(rssi);
-        Serial.print(" dBm | SNR: ");
-        Serial.print(snr);
-        Serial.println(" dB");
+        // Adaptive Tx Power adjustment for Ground Station based on RSSI
+        static int currentGsPower = 14;
+        int targetGsPower = currentGsPower;
+        if (rssi < -95) {
+            targetGsPower = 20; // Weak signal: boost to max power (20 dBm)
+        } else if (rssi > -80) {
+            targetGsPower = 14; // Strong signal: conserve power (14 dBm)
+        }
+        if (targetGsPower != currentGsPower) {
+            currentGsPower = targetGsPower;
+            LoRa.setTxPower(currentGsPower);
+        }
+
+        // Send raw binary payload to PC Serial without null-byte string truncation
+        Serial.write(packetBuffer, bytesRead);
+        Serial.printf(" RSSI:%d SNR:%.1f\n", rssi, snr);
     }
 
     // 2. Check for Serial input from PC (lora_logger.py / GUI)
@@ -133,13 +155,19 @@ void loop() {
                     startTone();
                     Serial.println("[LORA GS] Alarm Continuous ON");
                 }
+            } else if (cmd == "BEEP:SHORT" || cmd == "SHORT") {
+                startTone();
+                delay(60);
+                stopTone();
+                Serial.println("[LORA GS] Beep Short 60ms");
             } else if (cmd == "BEEP:OFF" || cmd == "OFF") {
                 if (currentBuzzerMode != BUZZER_MODE_OFF) {
                     currentBuzzerMode = BUZZER_MODE_OFF;
                     stopTone();
                     Serial.println("[LORA GS] Alarm OFF");
                 }
-            } else if (cmd.startsWith("THROTTLE:")) {
+            } else {
+                // Forward all outbound telemetry & configuration commands (THROTTLE, CUTOFF, SET_RC_FILTER, CALIB, etc.) to drone
                 Serial.print("[LORA TX Command] ");
                 Serial.println(cmd);
 

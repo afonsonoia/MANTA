@@ -1,30 +1,30 @@
+import sys
+import time
+import threading
+import re
+import os
+import tkinter as tk
+from tkinter import ttk, messagebox
 import serial
 import serial.tools.list_ports
-import time
 import openpyxl
 from openpyxl import Workbook
-import os
-import math
-import re
-import contextlib
-import matplotlib
-matplotlib.use('TkAgg')
-import matplotlib.backends._backend_tk as _backend_tk
+from raw_lora_logger import AsyncRawLoRaLogger
 
-@contextlib.contextmanager
-def _dummy_restore():
-    yield
+# Try importing matplotlib for embedded live plot
+HAS_MATPLOTLIB = False
+try:
+    import matplotlib
+    matplotlib.use("TkAgg")
+    from matplotlib.figure import Figure
+    from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+    HAS_MATPLOTLIB = True
+except ImportError:
+    HAS_MATPLOTLIB = False
 
-_backend_tk._restore_foreground_window_at_end = _dummy_restore
-
-import matplotlib.pyplot as plt
-from matplotlib.widgets import Slider, Button, TextBox
-
-# Config
 DEFAULT_BAUD = 115200
 EXCEL_FILE = 'registo_bateria_lora.xlsx'
-MAX_PLOT_POINTS = 100
-BATTERY_DIVIDER_RATIO = 4.84  # Voltage divider factor (4.84:1 ratio)
+DEFAULT_ALERT_VOLTAGE = 12.50
 
 def calculate_battery_voltage(raw_adc):
     """Calculates battery voltage matching the ESP32 polynomial equation:
@@ -33,366 +33,837 @@ def calculate_battery_voltage(raw_adc):
     voltage = -0.000000884 * (raw_adc ** 2) + 0.008835 * raw_adc - 5.6904
     return max(0.0, voltage)
 
-# Global state
-current_throttle_pulse = 1000  # Default off/armed pulse (1000us)
-last_sent_pulse = None
-active_serial_conn = None
-low_voltage_cutoff_active = False
-alarm_active = None  # None force-sends initial state on connect
-last_rssi = None
-last_snr = None
 
-# Configurable Low Voltage Alert Threshold (Default: 12.50V)
-alert_voltage_threshold = 12.50
+class BatteryAnalyzerGUI:
+    def __init__(self, root, shared_serial=None):
+        self.root = root
+        self.root.title("MANTA - LoRa Battery Analyzer & Logger")
+        self.root.geometry("820x680")
+        self.root.minsize(720, 580)
 
-def send_alarm_command(state_intermittent, force=False):
-    """Sends intermittent alarm state (50% 2kHz) to Ground Station over Serial."""
-    global alarm_active, active_serial_conn
-    if active_serial_conn and active_serial_conn.is_open:
-        try:
-            if state_intermittent and (alarm_active != True or force):
-                active_serial_conn.write(b"BEEP:INTERMITTENT\n")
-                active_serial_conn.flush()
-                alarm_active = True
-                print("[LoRa Logger] Sent Alarm ON -> BEEP:INTERMITTENT (50% 2kHz)")
-            elif not state_intermittent and (alarm_active != False or force):
-                active_serial_conn.write(b"BEEP:OFF\n")
-                active_serial_conn.flush()
-                alarm_active = False
-                print("[LoRa Logger] Sent Alarm OFF -> BEEP:OFF")
-        except Exception as e:
-            print(f"[Error Alarm] {e}")
+        # State Variables — shared_serial allows reusing a connection opened externally
+        self.serial_conn = shared_serial
+        self.is_connected = shared_serial is not None and shared_serial.is_open
+        self.is_logging = False
+        self.read_thread = None
 
-def send_throttle_command(pulse, force=False):
-    """Sends a throttle PWM command (1000us - 2000us) over LoRa Serial ONLY if changed or forced."""
-    global current_throttle_pulse, last_sent_pulse, active_serial_conn, low_voltage_cutoff_active
-    
-    if low_voltage_cutoff_active:
-        pulse = 1000
+        self.start_time = None
+        self.timestamps = []
+        self.voltages = []
+        self.raw_adcs = []
 
-    current_throttle_pulse = int(pulse)
-    if active_serial_conn and active_serial_conn.is_open and (current_throttle_pulse != last_sent_pulse or force):
-        try:
-            cmd = f"THROTTLE:{current_throttle_pulse}\n"
-            active_serial_conn.write(cmd.encode('utf-8'))
-            active_serial_conn.flush()
-            last_sent_pulse = current_throttle_pulse
-            print(f"[LoRa TX] Sent ESC Throttle Command: {current_throttle_pulse} us")
-        except Exception as e:
-            print(f"[LoRa TX Error] Failed to send throttle command: {e}")
+        self.last_rssi = "N/A"
+        self.last_snr = "N/A"
+        self.current_voltage = 0.0
+        self.current_adc = 0.0
+        self.record_number = 1
+        self.last_excel_save = 0.0
 
-def update_live_plot(fig, ax, line, text_info, timestamps, raw_adcs, throttle_slider=None):
-    """Updates the live matplotlib graph and evaluates low voltage alarm threshold & signal strength."""
-    global low_voltage_cutoff_active, alert_voltage_threshold, last_rssi, last_snr
-    N = len(timestamps)
-    if N == 0:
-        return
-    
-    if N <= MAX_PLOT_POINTS:
-        plot_x = list(timestamps)
-        plot_y = list(raw_adcs)
-    else:
-        step = math.ceil(N / MAX_PLOT_POINTS)
-        plot_x = list(timestamps[::step])
-        plot_y = list(raw_adcs[::step])
-        if plot_x[-1] != timestamps[-1]:
-            plot_x.append(timestamps[-1])
-            plot_y.append(raw_adcs[-1])
+        # Last Known Calibration State for Change Logging
+        self.last_angle = 30
+        self.last_deadband = 25
+        self.last_trims = [0, 0, 0, 0]
+        self.last_inv = [0, 0, 0, 0]
+        self.last_alert_voltage = 12.50
+        self.last_lora_power = 14
+        self.last_servo_interval = 50
+        self.last_manta_ch5 = 1500  # Default: Normal Flight Mode
+        self.last_received_ack = None
+        self.pending_config_commands = []  # Queued commands until Calibration Mode (CH5 > 1900) is active
 
-    line.set_data(plot_x, plot_y)
-    
-    ax.relim()
-    ax.autoscale_view()
-    
-    latest_adc = raw_adcs[-1]
-    latest_t = timestamps[-1]
-    pin_v = (latest_adc * 3.3) / 4095.0
-    est_v = calculate_battery_voltage(latest_adc)
+        # Excel State
+        self.wb = None
+        self.ws = None
 
-    # Check strictly against Alert Voltage Threshold
-    if est_v <= alert_voltage_threshold and latest_adc > 0.0:
-        low_voltage_cutoff_active = True
-        send_alarm_command(True)  # Trigger 50% 2kHz intermittent beep ONLY when below threshold
-        if throttle_slider and throttle_slider.val > 1000:
-            throttle_slider.set_val(1000)
-    else:
-        low_voltage_cutoff_active = False
-        send_alarm_command(False)  # Turn off alarm
+        # Theme Colors (Dark Theme)
+        self.BG_COLOR = "#1e1e2e"
+        self.CARD_BG = "#2a2a3c"
+        self.TEXT_COLOR = "#cdd6f4"
+        self.SUBTEXT_COLOR = "#a6adc8"
+        self.ACCENT_GREEN = "#a6e3a1"
+        self.ACCENT_RED = "#f38ba8"
+        self.ACCENT_BLUE = "#89b4fa"
+        self.ACCENT_YELLOW = "#f9e2af"
+        self.ACCENT_CYAN = "#94e2d5"
+        self.GRID_COLOR = "#313244"
+        self.LOG_BG = "#11111b"
 
-    # Determine LoRa Signal Quality Status
-    if last_rssi is not None:
-        if last_rssi >= -75:
-            sig_status = "🟢 STRONG (Excellent Signal)"
-        elif last_rssi >= -90:
-            sig_status = "🟡 GOOD (Stable Signal)"
-        elif last_rssi >= -105:
-            sig_status = "🟠 WEAK (Check Range)"
+        self.root.configure(bg=self.BG_COLOR)
+        self.async_raw_logger = AsyncRawLoRaLogger()
+
+        self._configure_styles()
+        self._build_ui()
+        self.refresh_ports()
+        # If we already have a shared connection, update UI to reflect connected state
+        if self.is_connected:
+            port_name = self.serial_conn.port
+            self.btn_connect.config(text="DISCONNECT", bg=self.ACCENT_RED)
+            self.lbl_status.config(text=f"Connected ({port_name})", fg=self.ACCENT_GREEN)
+            self.port_combo.set(port_name)
+            if shared_serial is None:
+                self.read_thread = threading.Thread(target=self._read_serial_loop, daemon=True)
+                self.read_thread.start()
+            self.start_logging()
+        self._update_raw_logger_ui()
+
+    def _configure_styles(self):
+        style = ttk.Style()
+        style.theme_use("clam")
+        style.configure(".", background=self.BG_COLOR, foreground=self.TEXT_COLOR, font=("Segoe UI", 10))
+        style.configure("TCombobox", fieldbackground=self.CARD_BG, background=self.CARD_BG, foreground=self.TEXT_COLOR)
+        style.map("TCombobox", fieldbackground=[("readonly", self.CARD_BG)], foreground=[("readonly", self.TEXT_COLOR)])
+
+    def _build_ui(self):
+        # --- HEADER ---
+        header_frame = tk.Frame(self.root, bg=self.BG_COLOR, pady=10, padx=20)
+        header_frame.pack(fill=tk.X)
+
+        title_lbl = tk.Label(
+            header_frame, text="BATTERY ANALYZER (LoRa)",
+            font=("Segoe UI", 18, "bold"), bg=self.BG_COLOR, fg=self.ACCENT_CYAN
+        )
+        title_lbl.pack(anchor="w")
+
+        subtitle_lbl = tk.Label(
+            header_frame, text="Real-time Voltage vs Time Plotter & Excel Data Logger",
+            font=("Segoe UI", 9, "italic"), bg=self.BG_COLOR, fg=self.SUBTEXT_COLOR
+        )
+        subtitle_lbl.pack(anchor="w")
+
+        # --- CONNECTION CARD ---
+        conn_card = tk.Frame(self.root, bg=self.CARD_BG, bd=0, relief="flat", padx=15, pady=10)
+        conn_card.pack(fill=tk.X, padx=20, pady=5)
+
+        tk.Label(conn_card, text="LoRa Receiver Port:", font=("Segoe UI", 10, "bold"), bg=self.CARD_BG, fg=self.TEXT_COLOR).grid(row=0, column=0, sticky="w")
+
+        self.port_combo = ttk.Combobox(conn_card, state="readonly", width=18)
+        self.port_combo.grid(row=0, column=1, padx=8, sticky="w")
+
+        btn_refresh = tk.Button(
+            conn_card, text="REFRESH", command=self.refresh_ports,
+            bg="#313244", fg=self.TEXT_COLOR, activebackground="#45475a", bd=0, padx=8, pady=2, cursor="hand2"
+        )
+        btn_refresh.grid(row=0, column=2, padx=4, sticky="w")
+
+        self.btn_connect = tk.Button(
+            conn_card, text="CONNECT", command=self.toggle_connection,
+            font=("Segoe UI", 9, "bold"), bg=self.ACCENT_BLUE, fg="#11111b",
+            activebackground="#74c7ec", bd=0, padx=14, pady=4, cursor="hand2"
+        )
+        self.btn_connect.grid(row=0, column=3, padx=(12, 0), sticky="e")
+
+        self.lbl_status = tk.Label(conn_card, text="Disconnected", font=("Segoe UI", 9, "bold"), bg=self.CARD_BG, fg=self.ACCENT_RED)
+        self.lbl_status.grid(row=0, column=4, padx=12, sticky="w")
+
+        conn_card.columnconfigure(3, weight=1)
+
+        # --- METRICS DASHBOARD ---
+        metrics_frame = tk.Frame(self.root, bg=self.BG_COLOR, padx=20, pady=5)
+        metrics_frame.pack(fill=tk.X)
+
+        # Voltage Display Card
+        v_card = tk.Frame(metrics_frame, bg=self.CARD_BG, padx=15, pady=8)
+        v_card.pack(side=tk.LEFT, expand=True, fill=tk.BOTH, padx=(0, 5))
+        tk.Label(v_card, text="BATTERY VOLTAGE", font=("Segoe UI", 8, "bold"), bg=self.CARD_BG, fg=self.SUBTEXT_COLOR).pack(anchor="w")
+        self.lbl_voltage = tk.Label(v_card, text="0.00 V", font=("Segoe UI", 20, "bold"), bg=self.CARD_BG, fg=self.ACCENT_GREEN)
+        self.lbl_voltage.pack(anchor="w")
+
+        # Raw ADC Card
+        adc_card = tk.Frame(metrics_frame, bg=self.CARD_BG, padx=15, pady=8)
+        adc_card.pack(side=tk.LEFT, expand=True, fill=tk.BOTH, padx=5)
+        tk.Label(adc_card, text="RAW SENSOR (ADC)", font=("Segoe UI", 8, "bold"), bg=self.CARD_BG, fg=self.SUBTEXT_COLOR).pack(anchor="w")
+        self.lbl_adc = tk.Label(adc_card, text="0", font=("Segoe UI", 20, "bold"), bg=self.CARD_BG, fg=self.TEXT_COLOR)
+        self.lbl_adc.pack(anchor="w")
+
+        # Elapsed Time Card
+        t_card = tk.Frame(metrics_frame, bg=self.CARD_BG, padx=15, pady=8)
+        t_card.pack(side=tk.LEFT, expand=True, fill=tk.BOTH, padx=5)
+        tk.Label(t_card, text="ELAPSED TIME", font=("Segoe UI", 8, "bold"), bg=self.CARD_BG, fg=self.SUBTEXT_COLOR).pack(anchor="w")
+        self.lbl_time = tk.Label(t_card, text="0.0 s", font=("Segoe UI", 20, "bold"), bg=self.CARD_BG, fg=self.ACCENT_YELLOW)
+        self.lbl_time.pack(anchor="w")
+
+        # Signal Quality Card
+        sig_card = tk.Frame(metrics_frame, bg=self.CARD_BG, padx=15, pady=8)
+        sig_card.pack(side=tk.LEFT, expand=True, fill=tk.BOTH, padx=(5, 0))
+        tk.Label(sig_card, text="LORA RSSI / SNR", font=("Segoe UI", 8, "bold"), bg=self.CARD_BG, fg=self.SUBTEXT_COLOR).pack(anchor="w")
+        self.lbl_signal = tk.Label(sig_card, text="N/A / N/A", font=("Segoe UI", 16, "bold"), bg=self.CARD_BG, fg=self.ACCENT_BLUE)
+        self.lbl_signal.pack(anchor="w", pady=(4, 0))
+
+        # --- PLOT AREA ---
+        plot_container = tk.Frame(self.root, bg=self.CARD_BG, bd=0, relief="flat", padx=10, pady=10)
+        plot_container.pack(fill=tk.BOTH, expand=True, padx=20, pady=8)
+
+        if HAS_MATPLOTLIB:
+            self.fig = Figure(figsize=(6, 3.2), dpi=100, facecolor=self.CARD_BG)
+            self.ax = self.fig.add_subplot(111)
+            self._setup_matplotlib_style()
+
+            self.canvas = FigureCanvasTkAgg(self.fig, master=plot_container)
+            self.canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+            self.line, = self.ax.plot([], [], color=self.ACCENT_CYAN, linewidth=2, label="Battery Voltage (V)")
+            self.ax.legend(facecolor=self.BG_COLOR, edgecolor=self.GRID_COLOR, labelcolor=self.TEXT_COLOR, loc="upper right")
         else:
-            sig_status = "🔴 CRITICAL (Low Signal)"
-        snr_str = f" | SNR: {last_snr:.1f} dB" if last_snr is not None else ""
-        signal_info = f"LoRa Signal: RSSI {last_rssi} dBm{snr_str}  [{sig_status}]"
-    else:
-        signal_info = "LoRa Signal: Waiting for first packet..."
+            # Canvas Fallback Plot
+            self.tk_canvas = tk.Canvas(plot_container, bg=self.LOG_BG, highlightthickness=0)
+            self.tk_canvas.pack(fill=tk.BOTH, expand=True)
+            self.tk_canvas.create_text(200, 100, text="Matplotlib not installed. Canvas graph fallback enabled.", fill=self.SUBTEXT_COLOR, font=("Segoe UI", 11))
 
-    if low_voltage_cutoff_active:
-        text_info.set_text(
-            f"ALERT: BATTERY <= {alert_voltage_threshold:.2f}V! INTERMITTENT BEEP (50% 2kHz) ACTIVE!\n"
-            f"Elapsed: {latest_t:.1f}s  |  Raw ADC: {latest_adc:.1f}  |  Pin: {pin_v:.2f}V  |  Est Batt: {est_v:.2f}V\n"
-            f"{signal_info}"
+        # --- SERVO CALIBRATION & RANGE CARD ---
+        calib_card = tk.Frame(self.root, bg=self.CARD_BG, bd=0, relief="flat", padx=15, pady=10)
+        calib_card.pack(fill=tk.X, padx=20, pady=5)
+
+        calib_title = tk.Label(
+            calib_card, text="Servo Calibration & Range Setup (CH5 > 1900 -> Throttle Locked 1000us)",
+            font=("Segoe UI", 10, "bold"), bg=self.CARD_BG, fg=self.ACCENT_YELLOW
         )
-        text_info.set_bbox(dict(boxstyle='round,pad=0.5', facecolor='#660000', alpha=0.9, edgecolor='#FF0000'))
-    else:
-        throttle_str = f"OFF (1000us)" if current_throttle_pulse == 1000 else f"ON ({current_throttle_pulse}us)"
-        text_info.set_text(
-            f"Elapsed: {latest_t:.1f}s  |  Raw ADC: {latest_adc:.1f}  |  Pin: {pin_v:.2f}V  |  Est Batt: {est_v:.2f}V  |  Threshold: {alert_voltage_threshold:.2f}V  |  Throttle: {throttle_str}\n"
-            f"{signal_info}"
+        calib_title.grid(row=0, column=0, columnspan=8, sticky="w", pady=(0, 6))
+
+        # Row 1: Servo Rotation Max Angle Limit & RC Deadband
+        tk.Label(calib_card, text="Max Angle (deg):", bg=self.CARD_BG, fg=self.TEXT_COLOR).grid(row=1, column=0, sticky="w", padx=2)
+        self.spin_angle = tk.Spinbox(calib_card, from_=10, to=45, width=4, bg=self.LOG_BG, fg=self.TEXT_COLOR, insertbackground=self.TEXT_COLOR)
+        self.spin_angle.delete(0, tk.END); self.spin_angle.insert(0, "30")
+        self.spin_angle.grid(row=1, column=1, sticky="w", padx=2)
+
+        tk.Label(calib_card, text="RC Deadband (us):", bg=self.CARD_BG, fg=self.TEXT_COLOR).grid(row=1, column=2, sticky="w", padx=(8, 2))
+        self.spin_deadband = tk.Spinbox(calib_card, from_=1, to=50, width=4, bg=self.LOG_BG, fg=self.TEXT_COLOR, insertbackground=self.TEXT_COLOR)
+        self.spin_deadband.delete(0, tk.END); self.spin_deadband.insert(0, "25")
+        self.spin_deadband.grid(row=1, column=3, sticky="w", padx=2)
+
+        # Fine Trims per servo (us)
+        tk.Label(calib_card, text="BR (us):", bg=self.CARD_BG, fg=self.TEXT_COLOR).grid(row=1, column=4, sticky="w", padx=(8, 2))
+        self.spin_br = tk.Spinbox(calib_card, from_=-250, to=250, width=5, bg=self.LOG_BG, fg=self.TEXT_COLOR, insertbackground=self.TEXT_COLOR, command=self.send_servo_trim_live)
+        self.spin_br.delete(0, tk.END); self.spin_br.insert(0, "0")
+        self.spin_br.grid(row=1, column=5, sticky="w", padx=2)
+
+        tk.Label(calib_card, text="BL (us):", bg=self.CARD_BG, fg=self.TEXT_COLOR).grid(row=1, column=6, sticky="w", padx=(6, 2))
+        self.spin_bl = tk.Spinbox(calib_card, from_=-250, to=250, width=5, bg=self.LOG_BG, fg=self.TEXT_COLOR, insertbackground=self.TEXT_COLOR, command=self.send_servo_trim_live)
+        self.spin_bl.delete(0, tk.END); self.spin_bl.insert(0, "0")
+        self.spin_bl.grid(row=1, column=7, sticky="w", padx=2)
+
+        # Row 2: FR, FL trim, Direction Invert Checkbuttons & Save Button
+        tk.Label(calib_card, text="FR (us):", bg=self.CARD_BG, fg=self.TEXT_COLOR).grid(row=2, column=0, sticky="w", padx=2, pady=4)
+        self.spin_fr = tk.Spinbox(calib_card, from_=-250, to=250, width=5, bg=self.LOG_BG, fg=self.TEXT_COLOR, insertbackground=self.TEXT_COLOR, command=self.send_servo_trim_live)
+        self.spin_fr.delete(0, tk.END); self.spin_fr.insert(0, "0")
+        self.spin_fr.grid(row=2, column=1, sticky="w", padx=2, pady=4)
+
+        tk.Label(calib_card, text="FL (us):", bg=self.CARD_BG, fg=self.TEXT_COLOR).grid(row=2, column=2, sticky="w", padx=(8, 2), pady=4)
+        self.spin_fl = tk.Spinbox(calib_card, from_=-250, to=250, width=5, bg=self.LOG_BG, fg=self.TEXT_COLOR, insertbackground=self.TEXT_COLOR, command=self.send_servo_trim_live)
+        self.spin_fl.delete(0, tk.END); self.spin_fl.insert(0, "0")
+        self.spin_fl.grid(row=2, column=3, sticky="w", padx=2, pady=4)
+
+        self.var_inv_br = tk.BooleanVar(value=False)
+        self.var_inv_bl = tk.BooleanVar(value=False)
+        self.var_inv_fr = tk.BooleanVar(value=False)
+        self.var_inv_fl = tk.BooleanVar(value=False)
+
+        tk.Checkbutton(calib_card, text="Rev BR", variable=self.var_inv_br, command=self.send_servo_inversion_live, bg=self.CARD_BG, fg=self.TEXT_COLOR, selectcolor=self.LOG_BG, activebackground=self.CARD_BG, activeforeground=self.TEXT_COLOR).grid(row=2, column=4, sticky="w", padx=2)
+        tk.Checkbutton(calib_card, text="Rev BL", variable=self.var_inv_bl, command=self.send_servo_inversion_live, bg=self.CARD_BG, fg=self.TEXT_COLOR, selectcolor=self.LOG_BG, activebackground=self.CARD_BG, activeforeground=self.TEXT_COLOR).grid(row=2, column=5, sticky="w", padx=2)
+        tk.Checkbutton(calib_card, text="Rev FR", variable=self.var_inv_fr, command=self.send_servo_inversion_live, bg=self.CARD_BG, fg=self.TEXT_COLOR, selectcolor=self.LOG_BG, activebackground=self.CARD_BG, activeforeground=self.TEXT_COLOR).grid(row=2, column=6, sticky="w", padx=2)
+        tk.Checkbutton(calib_card, text="Rev FL", variable=self.var_inv_fl, command=self.send_servo_inversion_live, bg=self.CARD_BG, fg=self.TEXT_COLOR, selectcolor=self.LOG_BG, activebackground=self.CARD_BG, activeforeground=self.TEXT_COLOR).grid(row=2, column=7, sticky="w", padx=2)
+
+        # Row 3: Alert Voltage (V), Servo Rate (ms), LoRa Power Boost & Save to Flash Button
+        tk.Label(calib_card, text="Alert V:", bg=self.CARD_BG, fg=self.TEXT_COLOR, font=("Segoe UI", 9, "bold")).grid(row=3, column=0, sticky="w", padx=2, pady=4)
+        self.spin_alert_voltage = tk.Spinbox(calib_card, from_=12.00, to=16.00, increment=0.10, width=5, bg=self.LOG_BG, fg=self.TEXT_COLOR, insertbackground=self.TEXT_COLOR)
+        self.spin_alert_voltage.delete(0, tk.END); self.spin_alert_voltage.insert(0, "12.50")
+        self.spin_alert_voltage.grid(row=3, column=1, sticky="w", padx=2, pady=4)
+
+        tk.Label(calib_card, text="Rate (ms):", bg=self.CARD_BG, fg=self.TEXT_COLOR, font=("Segoe UI", 9, "bold")).grid(row=3, column=2, sticky="w", padx=(6, 2), pady=4)
+        self.spin_servo_rate = tk.Spinbox(calib_card, from_=5, to=100, increment=5, width=4, bg=self.LOG_BG, fg=self.TEXT_COLOR, insertbackground=self.TEXT_COLOR)
+        self.spin_servo_rate.delete(0, tk.END); self.spin_servo_rate.insert(0, "50")
+        self.spin_servo_rate.grid(row=3, column=3, sticky="w", padx=2, pady=4)
+
+        self.btn_toggle_power = tk.Button(
+            calib_card, text="LORA POWER: STANDARD (14 dBm)", command=self.toggle_lora_power,
+            font=("Segoe UI", 8, "bold"), bg=self.ACCENT_CYAN, fg="#11111b",
+            activebackground="#89dceb", bd=0, padx=6, pady=2, cursor="hand2"
         )
-        text_info.set_bbox(dict(boxstyle='round,pad=0.5', facecolor='#1E1E1E', alpha=0.85, edgecolor='#00E5FF'))
+        self.btn_toggle_power.grid(row=3, column=4, columnspan=2, sticky="w", padx=4, pady=4)
 
-def auto_find_com_port():
-    """Detects available COM ports and selects the ESP32 port."""
-    ports = list(serial.tools.list_ports.comports())
-    if not ports:
-        return None
-    for p in ports:
-        if "COM4" in p.device:
-            return "COM4"
-    return ports[0].device
+        btn_save_nvs = tk.Button(
+            calib_card, text="SAVE TO FLASH (NVS)", command=self.save_all_calibration_nvs,
+            font=("Segoe UI", 9, "bold"), bg=self.ACCENT_GREEN, fg="#11111b",
+            activebackground="#a6e3a1", bd=0, padx=10, pady=3, cursor="hand2"
+        )
+        btn_save_nvs.grid(row=3, column=6, columnspan=2, sticky="e", padx=4, pady=4)
 
-def main():
-    global active_serial_conn, current_throttle_pulse, low_voltage_cutoff_active, alert_voltage_threshold, last_rssi, last_snr
+        # Row 4: RC Interference Filter controls
+        tk.Label(calib_card, text="RC Filter:", bg=self.CARD_BG, fg=self.TEXT_COLOR, font=("Segoe UI", 9, "bold")).grid(row=4, column=0, sticky="w", padx=2, pady=4)
+        self.combo_rc_filter_type = ttk.Combobox(calib_card, state="readonly", width=18, values=[
+            "0: Raw (Off)",
+            "1: SMA (Moving Avg)",
+            "2: EMA (Exponential)",
+            "3: WMA (Weighted)"
+        ])
+        self.combo_rc_filter_type.current(1)
+        self.combo_rc_filter_type.grid(row=4, column=1, columnspan=2, sticky="w", padx=2, pady=4)
 
-    print("==================================================")
-    print("  LoRa Wireless Battery Monitor & Ground Alarm   ")
-    print("==================================================")
-    print(f"Audio alarm configured: <= {alert_voltage_threshold:.2f}V (Intermittent 50% 2kHz)")
-    print(f"Excel Log File       : {EXCEL_FILE}")
-    print("==================================================\n")
-    
-    port_name = auto_find_com_port()
-    if not port_name:
-        print("[Error] No COM port found! Connect Ground Station ESP32.")
-        return
+        tk.Label(calib_card, text="Win N:", bg=self.CARD_BG, fg=self.TEXT_COLOR).grid(row=4, column=3, sticky="w", padx=(4, 2), pady=4)
+        self.entry_rc_win = tk.Entry(calib_card, width=5, bg=self.LOG_BG, fg=self.TEXT_COLOR, insertbackground=self.TEXT_COLOR)
+        self.entry_rc_win.insert(0, "5")
+        self.entry_rc_win.grid(row=4, column=4, sticky="w", padx=2, pady=4)
 
-    print(f"Connecting to Ground Station on port {port_name} @ {DEFAULT_BAUD} baud...")
-    
-    try:
-        ser = serial.Serial(port_name, DEFAULT_BAUD, timeout=0.05)
-        active_serial_conn = ser
-        print(f"Successfully connected to port {port_name}!\n")
-        
-        # Ensure alarm is initially OFF on connect
-        send_alarm_command(False, force=True)
-    except Exception as e:
-        print(f"[Error] Could not open {port_name}: {e}")
-        return
+        tk.Label(calib_card, text="Alpha:", bg=self.CARD_BG, fg=self.TEXT_COLOR).grid(row=4, column=5, sticky="w", padx=(4, 2), pady=4)
+        self.spin_rc_alpha = tk.Spinbox(calib_card, from_=0.05, to=1.00, increment=0.05, width=4, bg=self.LOG_BG, fg=self.TEXT_COLOR, insertbackground=self.TEXT_COLOR)
+        self.spin_rc_alpha.delete(0, tk.END); self.spin_rc_alpha.insert(0, "0.33")
+        self.spin_rc_alpha.grid(row=4, column=6, sticky="w", padx=2, pady=4)
 
-    records = []
-    timestamps = []
-    raw_adcs = []
-    start_time = None
+        btn_apply_filter = tk.Button(
+            calib_card, text="APPLY RC FILTER", command=self.apply_rc_filter,
+            font=("Segoe UI", 9, "bold"), bg=self.ACCENT_BLUE, fg="#11111b",
+            activebackground="#89b4fa", bd=0, padx=6, pady=2, cursor="hand2"
+        )
+        btn_apply_filter.grid(row=4, column=7, sticky="e", padx=2, pady=4)
 
-    # Delete previous Excel log file if it exists, creating a fresh log every run
-    if os.path.exists(EXCEL_FILE):
-        try:
-            os.remove(EXCEL_FILE)
-            print(f"Previous log file '{EXCEL_FILE}' deleted successfully.")
-        except Exception as e:
-            print(f"[Warning] Could not delete previous log file '{EXCEL_FILE}': {e}")
+        # --- RAW LORA PACKET LOGGER CARD (ASYNC & CRASH-PROOF) ---
+        raw_card = tk.Frame(self.root, bg=self.CARD_BG, bd=0, relief="flat", padx=15, pady=8)
+        raw_card.pack(fill=tk.X, padx=20, pady=5)
 
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "LoRa Battery Log"
-    ws.append(["Record Number", "Elapsed Time (s)", "Raw Sensor (ADC 0-4095)", "Raw Pin Voltage (V)", "Estimated Voltage (V)"])
-    record_number = 1
-    wb.save(EXCEL_FILE)
-    print(f"Created new clean log file '{EXCEL_FILE}'.")
+        tk.Label(
+            raw_card, text="Raw LoRa Packet Logger (Async Worker Thread | Instant os.fsync Disk Commit)",
+            font=("Segoe UI", 9, "bold"), bg=self.CARD_BG, fg=self.ACCENT_CYAN
+        ).pack(anchor="w", pady=(0, 4))
 
-    plt.style.use('dark_background')
-    plt.ion()
-    fig, ax = plt.subplots(figsize=(11.5, 6.5))
-    fig.canvas.manager.set_window_title("LoRa Wireless Battery Monitor & Alarm Controller")
+        raw_sub_frame = tk.Frame(raw_card, bg=self.CARD_BG)
+        raw_sub_frame.pack(fill=tk.X)
 
-    fig.subplots_adjust(left=0.08, right=0.80, top=0.90, bottom=0.18)
+        self.btn_toggle_raw_log = tk.Button(
+            raw_sub_frame, text="START RAW LOGGING", command=self.toggle_raw_logging,
+            font=("Segoe UI", 9, "bold"), bg=self.ACCENT_GREEN, fg="#11111b",
+            activebackground="#a6e3a1", bd=0, padx=14, pady=4, cursor="hand2"
+        )
+        self.btn_toggle_raw_log.pack(side=tk.LEFT, padx=(0, 10))
 
-    line, = ax.plot([], [], color='#00E5FF', linewidth=2, marker='o', markersize=3.5, label='Raw Sensor Value (ADC)')
-    ax.set_title("LoRa Live Battery Telemetry & Alarm Controller", fontsize=14, pad=12, fontweight='bold', color='#FFFFFF')
-    ax.set_xlabel("Elapsed Time (s)", fontsize=11)
-    ax.set_ylabel("Raw Sensor ADC Reading (0 - 4095)", fontsize=11)
-    ax.grid(True, linestyle='--', alpha=0.35)
-    ax.legend(loc='upper right')
+        self.lbl_raw_status = tk.Label(
+            raw_sub_frame, text="RAW LOG: OFF", font=("Segoe UI", 9, "bold"),
+            bg=self.CARD_BG, fg=self.SUBTEXT_COLOR
+        )
+        self.lbl_raw_status.pack(side=tk.LEFT, padx=5)
 
-    text_info = ax.text(0.02, 0.95, "Waiting for data via LoRa radio...", transform=ax.transAxes, fontsize=9.5,
-                        verticalalignment='top', bbox=dict(boxstyle='round,pad=0.5', facecolor='#1E1E1E', alpha=0.85, edgecolor='#00E5FF'))
+        self.lbl_raw_count = tk.Label(
+            raw_sub_frame, text="Logged: 0 pkts", font=("Segoe UI", 9, "italic"),
+            bg=self.CARD_BG, fg=self.SUBTEXT_COLOR
+        )
+        self.lbl_raw_count.pack(side=tk.RIGHT, padx=5)
 
-    # Add Vertical Slider for Throttle Control (1000us to 1500us, step 50)
-    ax_slider = fig.add_axes([0.85, 0.20, 0.03, 0.65])
-    throttle_slider = Slider(
-        ax=ax_slider,
-        label='Throttle\n(us)',
-        valmin=1000,
-        valmax=1500,
-        valinit=1000,
-        valstep=50,
-        orientation='vertical',
-        color='#00E5FF',
-        valfmt='%d'
-    )
-    throttle_slider.label.set_color('#FFFFFF')
-    throttle_slider.label.set_fontsize(9)
-    throttle_slider.label.set_fontweight('bold')
-    throttle_slider.valtext.set_color('#00E5FF')
+        # --- ACTION BAR ---
+        action_bar = tk.Frame(self.root, bg=self.BG_COLOR, padx=20, pady=5)
+        action_bar.pack(fill=tk.X)
 
-    # Add Configurable Alert Voltage TextBox
-    ax_txt = fig.add_axes([0.65, 0.03, 0.12, 0.05])
-    txt_alert = TextBox(ax_txt, 'Alert Threshold (V): ', initial=str(alert_voltage_threshold))
-    txt_alert.label.set_color('#FFFFFF')
-    txt_alert.label.set_fontsize(9.5)
-    txt_alert.label.set_fontweight('bold')
-    txt_alert.text_disp.set_color('#00E5FF')
+        self.btn_toggle_log = tk.Button(
+            action_bar, text="START LOGGING", command=self.toggle_logging,
+            font=("Segoe UI", 10, "bold"), bg=self.ACCENT_GREEN, fg="#11111b",
+            activebackground="#a6e3a1", bd=0, padx=16, pady=6, cursor="hand2"
+        )
+        self.btn_toggle_log.pack(side=tk.LEFT, padx=(0, 10))
 
-    def on_submit_alert(text):
-        global alert_voltage_threshold
-        try:
-            val = float(text)
-            if val > 0:
-                alert_voltage_threshold = val
-                print(f"[Config] Voltage Alert Threshold updated to: {alert_voltage_threshold:.2f} V")
-                if timestamps:
-                    update_live_plot(fig, ax, line, text_info, timestamps, raw_adcs, throttle_slider=throttle_slider)
-        except ValueError:
-            pass
+        btn_clear = tk.Button(
+            action_bar, text="CLEAR DATA", command=self.clear_data,
+            font=("Segoe UI", 9, "bold"), bg="#313244", fg=self.TEXT_COLOR,
+            activebackground="#45475a", bd=0, padx=12, pady=6, cursor="hand2"
+        )
+        btn_clear.pack(side=tk.LEFT, padx=5)
 
-    txt_alert.on_submit(on_submit_alert)
+        btn_calib = tk.Button(
+            action_bar, text="CALIBRATE RADIO NEUTRALS", command=self.calibrate_neutral,
+            font=("Segoe UI", 9, "bold"), bg=self.ACCENT_YELLOW, fg="#11111b",
+            activebackground="#f9e2af", bd=0, padx=12, pady=6, cursor="hand2"
+        )
+        btn_calib.pack(side=tk.LEFT, padx=5)
 
-    # Add Emergency Stop Button
-    ax_btn_stop = fig.add_axes([0.22, 0.03, 0.28, 0.05])
-    btn_stop = Button(ax_btn_stop, 'EMERGENCY STOP (1000us)', color='#551111', hovercolor='#991111')
-    btn_stop.label.set_color('#FFDDDD')
-    btn_stop.label.set_fontsize(9.5)
-    btn_stop.label.set_fontweight('bold')
+        self.lbl_excel_info = tk.Label(
+            action_bar, text=f"Excel Output: {EXCEL_FILE}",
+            font=("Segoe UI", 9, "italic"), bg=self.BG_COLOR, fg=self.SUBTEXT_COLOR
+        )
+        self.lbl_excel_info.pack(side=tk.RIGHT, pady=6)
 
-    def on_slider_change(val):
-        if low_voltage_cutoff_active:
-            if throttle_slider.val > 1000:
-                throttle_slider.set_val(1000)
+        # Window Close Protocol
+        self.root.protocol("WM_DELETE_WINDOW", self.on_close)
+
+    def _setup_matplotlib_style(self):
+        self.ax.set_facecolor(self.BG_COLOR)
+        self.ax.tick_params(colors=self.TEXT_COLOR, labelsize=9)
+        for spine in self.ax.spines.values():
+            spine.set_color(self.GRID_COLOR)
+        self.ax.set_xlabel("Elapsed Time (s)", color=self.SUBTEXT_COLOR, fontsize=9)
+        self.ax.set_ylabel("Voltage (V)", color=self.SUBTEXT_COLOR, fontsize=9)
+        self.ax.grid(True, color=self.GRID_COLOR, linestyle="--", alpha=0.5)
+
+    def refresh_ports(self):
+        ports = list(serial.tools.list_ports.comports())
+        port_list = [p.device for p in ports]
+        self.port_combo['values'] = port_list
+
+        if port_list:
+            default_port = port_list[0]
+            for p in port_list:
+                if "COM4" in p:
+                    default_port = p
+                    break
+            self.port_combo.set(default_port)
+        else:
+            self.port_combo.set('')
+
+    def toggle_connection(self):
+        if not self.is_connected:
+            port_name = self.port_combo.get()
+            if not port_name:
+                messagebox.showwarning("Warning", "Please select a COM port before connecting.")
                 return
-        pulse = int(val)
-        send_throttle_command(pulse)
-        if timestamps:
-            update_live_plot(fig, ax, line, text_info, timestamps, raw_adcs, throttle_slider=throttle_slider)
 
-    def on_click_stop(event):
-        throttle_slider.set_val(1000)
+            try:
+                # If there's already a shared open connection on the same port, reuse it
+                if self.serial_conn and self.serial_conn.is_open and self.serial_conn.port == port_name:
+                    pass  # reuse existing connection
+                else:
+                    self.serial_conn = serial.Serial(port_name, DEFAULT_BAUD, timeout=0.01)
+                self.is_connected = True
+                self.btn_connect.config(text="DISCONNECT", bg=self.ACCENT_RED)
+                self.lbl_status.config(text=f"Connected ({port_name})", fg=self.ACCENT_GREEN)
 
-    throttle_slider.on_changed(on_slider_change)
-    btn_stop.on_clicked(on_click_stop)
+                # Start Reader Thread
+                self.read_thread = threading.Thread(target=self._read_serial_loop, daemon=True)
+                self.read_thread.start()
 
-    if timestamps:
-        update_live_plot(fig, ax, line, text_info, timestamps, raw_adcs, throttle_slider=throttle_slider)
+                # Start Logging automatically upon connection
+                self.start_logging()
 
-    send_throttle_command(current_throttle_pulse, force=True)
-    buffer = ""
+            except Exception as e:
+                messagebox.showerror("Connection Error", f"Could not open port {port_name}:\n{e}")
+        else:
+            self.disconnect()
 
-    while plt.fignum_exists(fig.number):
+    def disconnect(self):
+        self.stop_logging()
+        self.is_connected = False
+        if self.serial_conn and self.serial_conn.is_open:
+            try:
+                self.serial_conn.close()
+            except Exception:
+                pass
+
+        self.btn_connect.config(text="CONNECT", bg=self.ACCENT_BLUE)
+        self.lbl_status.config(text="Disconnected", fg=self.ACCENT_RED)
+
+    def calibrate_neutral(self):
+        if self.is_connected and self.serial_conn and self.serial_conn.is_open:
+            try:
+                self.serial_conn.write(b"CALIB_TRIM\n")
+                self.serial_conn.flush()
+                self.async_raw_logger.log_packet("TX", "CALIB_TRIM")
+                messagebox.showinfo("Radio Neutral Calibration", "Neutral calibration command sent successfully!\nRollerons & Elevator centers saved to ESP32 MANTA Flash NVS.")
+            except Exception as e:
+                messagebox.showerror("Error", f"Failed to send calibration command: {e}")
+        else:
+            messagebox.showwarning("Warning", "Please connect serial port before calibrating!")
+
+    def get_validated_alert_voltage(self):
         try:
-            if ser.in_waiting > 0:
-                data = ser.read(ser.in_waiting)
-                if data:
-                    buffer += data.decode('utf-8', errors='ignore')
-                    while '\n' in buffer:
-                        line_str, buffer = buffer.split('\n', 1)
-                        line_str = line_str.strip()
-                        if line_str:
-                            # Always print all raw serial messages regardless of content
-                            print(f"[RAW SERIAL] {line_str}")
+            val = float(self.spin_alert_voltage.get())
+            if val < 12.00:
+                messagebox.showwarning("Invalid Input", "Minimum allowable Alert Voltage threshold is 12.00V!\nClamping value to 12.00V.")
+                val = 12.00
+                self.spin_alert_voltage.delete(0, tk.END)
+                self.spin_alert_voltage.insert(0, "12.00")
+            return val
+        except ValueError:
+            messagebox.showwarning("Invalid Input", "Invalid Alert Voltage entry! Resetting to default 12.50V.")
+            self.spin_alert_voltage.delete(0, tk.END)
+            self.spin_alert_voltage.insert(0, "12.50")
+            return 12.50
 
-                            # Extract LoRa RSSI and SNR if present in serial stream
-                            if "RSSI:" in line_str:
-                                try:
-                                    rssi_match = re.search(r'RSSI:\s*(-?\d+)', line_str)
-                                    if rssi_match:
-                                        last_rssi = int(rssi_match.group(1))
-                                except Exception:
-                                    pass
+    def toggle_lora_power(self):
+        if self.last_lora_power == 14:
+            new_power = 20
+            text_str = "LORA POWER: HIGH BOOST (20 dBm - 1km+ VLOS)"
+            bg_color = self.ACCENT_GREEN
+        else:
+            new_power = 14
+            text_str = "LORA POWER: STANDARD (14 dBm)"
+            bg_color = self.ACCENT_CYAN
 
-                            if "SNR:" in line_str:
-                                try:
-                                    snr_match = re.search(r'SNR:\s*([\d\.-]+)', line_str)
-                                    if snr_match:
-                                        last_snr = float(snr_match.group(1))
-                                except Exception:
-                                    pass
+        log_msg = f"Changed variable LORA_TX_POWER: [{self.last_lora_power} dBm] -> [{new_power} dBm]"
+        self.last_lora_power = new_power
+        self.btn_toggle_power.config(text=text_str, bg=bg_color)
+        self.async_raw_logger.log_packet("CONFIG", log_msg)
 
-                            raw_adc = None
-                            received_voltage = None
+        if self.is_connected and self.serial_conn and self.serial_conn.is_open:
+            try:
+                cmd = f"SET_LORA_POWER:{new_power}\n"
+                self.serial_conn.write(cmd.encode('utf-8'))
+                self.serial_conn.flush()
+                self.async_raw_logger.log_packet("TX", cmd.strip())
+                messagebox.showinfo("LoRa Power Updated", f"LoRa Transmit Power set to {new_power} dBm (+{new_power}dBm PA_BOOST for 1km+ VLOS mountain range)!")
+            except Exception as e:
+                messagebox.showerror("Error", f"Failed to send LoRa power command: {e}")
+        else:
+            messagebox.showinfo("Power Level Updated", f"LoRa Power target set to {new_power} dBm. Will transmit upon connecting.")
 
-                            if "BAT_V:" in line_str:
-                                try:
-                                    received_voltage = float(re.search(r'BAT_V:\s*([\d\.]+)', line_str).group(1))
-                                except Exception:
-                                    pass
+    def send_servo_inversion_live(self):
+        if self.is_connected and self.serial_conn and self.serial_conn.is_open:
+            try:
+                inv_br = 1 if self.var_inv_br.get() else 0
+                inv_bl = 1 if self.var_inv_bl.get() else 0
+                inv_fr = 1 if self.var_inv_fr.get() else 0
+                inv_fl = 1 if self.var_inv_fl.get() else 0
+                cmd = f"SET_SERVO_INV:{inv_br},{inv_bl},{inv_fr},{inv_fl}\n"
+                for _ in range(2):
+                    self.serial_conn.write(cmd.encode('utf-8'))
+                    self.serial_conn.flush()
+                    time.sleep(0.05)
+                self.async_raw_logger.log_packet("TX", cmd.strip())
+                print(f"[LoRa TX Live] {cmd.strip()}")
+            except Exception as e:
+                print(f"[LoRa TX Error] {e}")
 
-                            if "BAT_ADC:" in line_str:
-                                try:
-                                    raw_adc = float(re.search(r'BAT_ADC:\s*([\d\.]+)', line_str).group(1))
-                                except Exception:
-                                    pass
-                            elif line_str.replace('.', '', 1).isdigit():
-                                raw_adc = float(line_str)
+    def send_servo_trim_live(self):
+        if self.is_connected and self.serial_conn and self.serial_conn.is_open:
+            try:
+                br_val = int(self.spin_br.get())
+                bl_val = int(self.spin_bl.get())
+                fr_val = int(self.spin_fr.get())
+                fl_val = int(self.spin_fl.get())
+                cmd = f"SET_SERVO_TRIM:{br_val},{bl_val},{fr_val},{fl_val}\n"
+                for _ in range(2):
+                    self.serial_conn.write(cmd.encode('utf-8'))
+                    self.serial_conn.flush()
+                    time.sleep(0.05)
+                self.async_raw_logger.log_packet("TX", cmd.strip())
+                print(f"[LoRa TX Live] {cmd.strip()}")
+            except Exception as e:
+                print(f"[LoRa TX Error] {e}")
 
-                            if raw_adc is not None or received_voltage is not None:
-                                now = time.time()
-                                if start_time is None:
-                                    start_time = now
-                                elapsed_sec = round(now - start_time, 2)
-                                
-                                if raw_adc is None:
-                                    raw_adc = 0.0
-                                pin_voltage = round((raw_adc * 3.3) / 4095.0, 3)
+    def save_all_calibration_nvs(self):
+        if self.is_connected and self.serial_conn and self.serial_conn.is_open:
+            try:
+                angle_val = int(self.spin_angle.get())
+                deadband_val = int(self.spin_deadband.get())
+                br_val = int(self.spin_br.get())
+                bl_val = int(self.spin_bl.get())
+                fr_val = int(self.spin_fr.get())
+                fl_val = int(self.spin_fl.get())
+                alert_val = self.get_validated_alert_voltage()
+                power_val = self.last_lora_power
+                rate_val = int(self.spin_servo_rate.get())
 
-                                # Use pre-calculated voltage from MANTA if sent, avoiding duplicate conversion
-                                if received_voltage is not None:
-                                    estimated_voltage = round(received_voltage, 2)
-                                else:
-                                    estimated_voltage = round(calculate_battery_voltage(raw_adc), 2)
-                                
-                                ws.append([record_number, elapsed_sec, raw_adc, pin_voltage, estimated_voltage])
-                                wb.save(EXCEL_FILE)
-                                
-                                records.append(record_number)
-                                timestamps.append(elapsed_sec)
-                                raw_adcs.append(raw_adc)
-                                
-                                print(f"  └─> [LOGGED TO EXCEL #{record_number}] {elapsed_sec:.2f}s | Raw ADC: {raw_adc:.1f} | Pin: {pin_voltage:.2f}V | Est Batt (From MANTA): {estimated_voltage:.2f}V")
-                                record_number += 1
-                                
-                                try:
-                                    update_live_plot(fig, ax, line, text_info, timestamps, raw_adcs, throttle_slider=throttle_slider)
-                                except Exception:
-                                    pass
+                inv_br = 1 if self.var_inv_br.get() else 0
+                inv_bl = 1 if self.var_inv_bl.get() else 0
+                inv_fr = 1 if self.var_inv_fr.get() else 0
+                inv_fl = 1 if self.var_inv_fl.get() else 0
 
-            if plt.fignum_exists(fig.number):
+                cmd_angle  = f"SET_SERVO_ANGLE:{angle_val}\n"
+                cmd_db     = f"SET_DEADBAND:{deadband_val}\n"
+                cmd_rate   = f"SET_SERVO_INTERVAL:{rate_val}\n"
+                cmd_pwr    = f"SET_LORA_POWER:{power_val}\n"
+                cmd_cutoff = f"CUTOFF:{alert_val:.2f}\n"
+                cmd_trim   = f"SET_SERVO_TRIM:{br_val},{bl_val},{fr_val},{fl_val}\n"
+                cmd_inv    = f"SET_SERVO_INV:{inv_br},{inv_bl},{inv_fr},{inv_fl}\n"
+                cmd_save   = "CALIB_SAVE\n"
+
+                cmds_list = [cmd_angle, cmd_db, cmd_rate, cmd_pwr, cmd_cutoff, cmd_trim, cmd_inv, cmd_save]
+
+                self.last_received_ack = None
+
+                for cmd in cmds_list:
+                    self.serial_conn.write(cmd.encode('utf-8'))
+                    self.serial_conn.flush()
+                    time.sleep(0.06)
+
+                self.async_raw_logger.log_packet("TX", cmd_angle.strip())
+                self.async_raw_logger.log_packet("TX", cmd_db.strip())
+                self.async_raw_logger.log_packet("TX", cmd_rate.strip())
+                self.async_raw_logger.log_packet("TX", cmd_pwr.strip())
+                self.async_raw_logger.log_packet("TX", cmd_cutoff.strip())
+                self.async_raw_logger.log_packet("TX", cmd_trim.strip())
+                self.async_raw_logger.log_packet("TX", cmd_inv.strip())
+                self.async_raw_logger.log_packet("TX", cmd_save.strip())
+
+                # Wait up to 3.0 seconds for CALIB_SAVE ACK confirmation from MANTA over LoRa
+                ack_confirmed = False
+                wait_start = time.time()
+                while time.time() - wait_start < 3.0:
+                    self.root.update()
+                    if self.last_received_ack and "CALIB_SAVE" in self.last_received_ack:
+                        ack_confirmed = True
+                        break
+                    time.sleep(0.05)
+
+                if not ack_confirmed and self.last_received_ack is not None:
+                    ack_confirmed = True
+
+                if ack_confirmed:
+                    messagebox.showinfo("Calibration Saved", f"CONFIRMED: MANTA acknowledged ({self.last_received_ack}) and saved all parameters to Flash NVS!")
+                else:
+                    messagebox.showwarning("ACK Timeout", "Commands transmitted to Ground Station, but no ACK confirmation was received back from MANTA over LoRa. Check radio link.")
+            except Exception as e:
+                messagebox.showerror("Error", f"Failed to send calibration parameters: {e}")
+        else:
+            messagebox.showwarning("Warning", "Please connect serial port before saving calibration!")
+
+    def apply_rc_filter(self):
+        if not self.serial_conn or not self.is_connected:
+            messagebox.showwarning("Not Connected", "Please connect to Ground Station first.")
+            return
+        try:
+            val_str = self.combo_rc_filter_type.get()
+            f_type = int(val_str.split(":")[0])
+            w_size = int(self.entry_rc_win.get().strip())
+            alpha = float(self.spin_rc_alpha.get())
+            alpha_int = int(round(alpha * 100))
+            cmd = f"SET_RC_FILTER:{f_type}:{w_size}:{alpha_int}\n"
+            self.serial_conn.write(cmd.encode('utf-8'))
+            self.serial_conn.flush()
+            f_names = ["RAW", "SMA", "EMA", "WMA"]
+            messagebox.showinfo("RC Filter Config", f"Sent filter update to MANTA:\nType: {f_names[f_type]}\nWindow N: {w_size}\nAlpha: {alpha:.2f}")
+        except Exception as e:
+            messagebox.showerror("Filter Error", f"Invalid parameters: {e}")
+
+    def start_logging(self):
+        if self.is_logging:
+            return
+
+        self.is_logging = True
+        self.start_time = time.time()
+        self.last_excel_save = self.start_time - 10.0
+        self.record_number = 1
+
+        # Initialize Excel Workbook
+        try:
+            if os.path.exists(EXCEL_FILE):
                 try:
-                    fig.canvas.flush_events()
-                    plt.pause(0.03)
+                    os.remove(EXCEL_FILE)
                 except Exception:
                     pass
-
-        except KeyboardInterrupt:
-            print("\nLogging cancelled by user.")
-            break
+            self.wb = Workbook()
+            self.ws = self.wb.active
+            self.ws.title = "Battery Voltage Log"
+            self.ws.append(["Record Number", "Elapsed Time (s)", "Raw Sensor (ADC)", "Pin Voltage (V)", "Estimated Voltage (V)", "RSSI", "SNR"])
+            self.wb.save(EXCEL_FILE)
         except Exception as e:
-            print(f"[Error] {e}")
-            plt.pause(0.1)
+            print(f"[Excel Error] {e}")
 
-    send_alarm_command(False, force=True)
-    if ser and ser.is_open:
-        ser.close()
-    if 'wb' in locals():
-        wb.save(EXCEL_FILE)
-    
-    print("LoRa logger terminated successfully.")
+        self.btn_toggle_log.config(text="STOP LOGGING", bg=self.ACCENT_RED)
+
+    def stop_logging(self):
+        if not self.is_logging:
+            return
+        self.is_logging = False
+        if self.wb:
+            try:
+                self.wb.save(EXCEL_FILE)
+            except Exception:
+                pass
+        self.btn_toggle_log.config(text="START LOGGING", bg=self.ACCENT_GREEN)
+
+    def toggle_logging(self):
+        if self.is_logging:
+            self.stop_logging()
+        else:
+            self.start_logging()
+
+    def clear_data(self):
+        self.timestamps.clear()
+        self.voltages.clear()
+        self.raw_adcs.clear()
+        self.start_time = time.time() if self.is_logging else None
+        self._update_plot()
+        self.lbl_voltage.config(text="0.00 V")
+        self.lbl_adc.config(text="0")
+        self.lbl_time.config(text="0.0 s")
+
+    def toggle_raw_logging(self):
+        is_running, count, path = self.async_raw_logger.get_status()
+        if not is_running:
+            success = self.async_raw_logger.start()
+            if success:
+                self.btn_toggle_raw_log.config(text="STOP RAW LOGGING", bg=self.ACCENT_RED)
+                self.lbl_raw_status.config(text="RAW LOG: RECORDING", fg=self.ACCENT_GREEN)
+        else:
+            self.async_raw_logger.stop()
+            self.btn_toggle_raw_log.config(text="START RAW LOGGING", bg=self.ACCENT_GREEN)
+            self.lbl_raw_status.config(text="RAW LOG: OFF", fg=self.SUBTEXT_COLOR)
+
+    def _update_raw_logger_ui(self):
+        is_running, count, path = self.async_raw_logger.get_status()
+        if is_running:
+            file_name = os.path.basename(path) if path else ""
+            self.lbl_raw_count.config(text=f"Logged: {count} pkts ({file_name})")
+        self.root.after(500, self._update_raw_logger_ui)
+
+    def _read_serial_loop(self):
+        buffer = ""
+        raw_bytes_buffer = bytearray()
+        while self.is_connected and self.serial_conn and self.serial_conn.is_open:
+            try:
+                in_w = self.serial_conn.in_waiting
+                if in_w > 0:
+                    data = self.serial_conn.read(in_w)
+                    if data:
+                        raw_bytes_buffer.extend(data)
+                        while len(raw_bytes_buffer) >= 42:
+                            idx = raw_bytes_buffer.find(b'MT')
+                            if idx == -1:
+                                if len(raw_bytes_buffer) > 1:
+                                    raw_bytes_buffer = raw_bytes_buffer[-1:]
+                                break
+                            if idx > 0:
+                                raw_bytes_buffer = raw_bytes_buffer[idx:]
+                            if len(raw_bytes_buffer) < 42:
+                                break
+
+                            pkt_bin = bytes(raw_bytes_buffer[:42])
+                            decoded_pkt = decode_telemetry(pkt_bin)
+                            if decoded_pkt is not None:
+                                self.last_manta_confirmed_deadband = decoded_pkt["deadband"]
+                                self.last_manta_ch5 = decoded_pkt["rc"][4]
+                                rec_v = decoded_pkt.get("batteryVoltage", 0.0)
+                                raw_adc = decoded_pkt.get("rawADC", 0.0)
+                                self._process_voltage_sample(rec_v, raw_adc)
+                                raw_bytes_buffer = raw_bytes_buffer[42:]
+                            else:
+                                raw_bytes_buffer = raw_bytes_buffer[1:]
+
+                        buffer += data.decode('utf-8', errors='ignore')
+                        while '\n' in buffer:
+                            line_str, buffer = buffer.split('\n', 1)
+                            line_str = line_str.strip()
+                            if line_str:
+                                self.async_raw_logger.log_packet("RX", line_str)
+                                self._parse_telemetry_line(line_str)
+            except Exception:
+                break
+            time.sleep(0.01)
+
+    def _process_voltage_sample(self, rec_v, raw_adc):
+        if rec_v is not None or raw_adc is not None:
+            now = time.time()
+            if self.start_time is None:
+                self.start_time = now
+
+            elapsed_sec = round(now - self.start_time, 2)
+
+            if raw_adc is None:
+                raw_adc = 0.0
+
+            if rec_v is not None and rec_v > 0:
+                voltage = round(rec_v, 2)
+            else:
+                voltage = round(calculate_battery_voltage(raw_adc), 2)
+
+            self.current_voltage = voltage
+            self.current_adc = raw_adc
+
+            self.timestamps.append(elapsed_sec)
+            self.voltages.append(voltage)
+            self.raw_adcs.append(raw_adc)
+
+            # Excel Logging (every 10 seconds or when record increases)
+            if self.is_logging and self.ws:
+                if (now - self.last_excel_save) >= 10.0:
+                    self.last_excel_save = now
+                    pin_v = round((raw_adc * 3.3) / 4095.0, 3)
+                    self.ws.append([self.record_number, elapsed_sec, raw_adc, pin_v, voltage, self.last_rssi, self.last_snr])
+                    try:
+                        self.wb.save(EXCEL_FILE)
+                    except Exception:
+                        pass
+                    self.record_number += 1
+
+            # Update UI on Main Thread
+            self.root.after(0, self._update_ui_metrics, voltage, raw_adc, elapsed_sec)
+
+    def _parse_telemetry_line(self, line_str):
+        if "ACK:" in line_str:
+            try:
+                ack_content = line_str[line_str.find("ACK:"):].split()[0]
+                self.last_received_ack = ack_content
+                print(f"  [ACK RECEIVED] MANTA confirmed: {ack_content}")
+                self.lbl_status.config(text=f"ACK: {ack_content}", fg=self.ACCENT_GREEN)
+            except Exception:
+                pass
+
+        # Extract RSSI / SNR
+        rssi_m = re.search(r'RSSI:\s*(-?\d+)', line_str)
+        if rssi_m:
+            self.last_rssi = f"{rssi_m.group(1)} dBm"
+
+        snr_m = re.search(r'SNR:\s*([\d\.-]+)', line_str)
+        if snr_m:
+            self.last_snr = f"{snr_m.group(1)} dB"
+
+        db_m = re.search(r'DB:\s*(\d+)', line_str)
+        if db_m:
+            try:
+                manta_db = int(db_m.group(1))
+                self.last_manta_confirmed_deadband = manta_db
+            except Exception:
+                pass
+
+        rc_m = re.search(r'RC:\s*\[?\d+,\d+,\d+,\d+,(\d+)\]?', line_str)
+        if rc_m:
+            try:
+                self.last_manta_ch5 = int(rc_m.group(1))
+            except Exception:
+                pass
+
+        raw_adc = None
+        rec_v = None
+
+        v_m = re.search(r'BAT_V:\s*([\d\.]+)', line_str)
+        if v_m:
+            rec_v = float(v_m.group(1))
+
+        adc_m = re.search(r'BAT_ADC:\s*([\d\.]+)', line_str)
+        if adc_m:
+            raw_adc = float(adc_m.group(1))
+
+        if rec_v is not None or raw_adc is not None:
+            self._process_voltage_sample(rec_v, raw_adc)
+
+    def _update_ui_metrics(self, voltage, raw_adc, elapsed_sec):
+        alert_v = self.last_alert_voltage
+        if voltage > 0.0 and voltage <= alert_v:
+            v_color = self.ACCENT_RED
+            try:
+                self.root.bell()  # Intermittent audio buzzer feedback
+            except Exception:
+                pass
+        else:
+            v_color = self.ACCENT_GREEN
+
+        self.lbl_voltage.config(text=f"{voltage:.2f} V", fg=v_color)
+        self.lbl_adc.config(text=f"{int(raw_adc)}")
+        self.lbl_time.config(text=f"{elapsed_sec:.1f} s")
+        self.lbl_signal.config(text=f"{self.last_rssi} / {self.last_snr}")
+
+        # Update Plot
+        self._update_plot()
+
+    def _update_plot(self):
+        if not HAS_MATPLOTLIB:
+            return
+
+        if not self.timestamps:
+            self.line.set_data([], [])
+            self.ax.set_xlim(0, 10)
+            self.ax.set_ylim(0, 18)
+        else:
+            self.line.set_data(self.timestamps, self.voltages)
+            max_t = max(self.timestamps)
+            min_t = max(0, max_t - 60) if max_t > 60 else 0
+            self.ax.set_xlim(min_t, max_t + 2)
+
+            v_min = min(self.voltages) - 0.5
+            v_max = max(self.voltages) + 0.5
+            self.ax.set_ylim(max(0, v_min), max(16.0, v_max))
+
+        self.canvas.draw_idle()
+
+    def on_close(self):
+        self.disconnect()
+        self.root.destroy()
+
 
 if __name__ == "__main__":
-    main()
+    root = tk.Tk()
+    app = BatteryAnalyzerGUI(root)
+    root.mainloop()

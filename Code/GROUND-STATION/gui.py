@@ -11,8 +11,8 @@ class SimpleGroundStationGUI:
     def __init__(self, root):
         self.root = root
         self.root.title("GROUND-STATION - Buzzer Controller")
-        self.root.geometry("520x560")
-        self.root.resizable(False, False)
+        self.root.geometry("540x720")
+        self.root.resizable(True, True)
 
         # Serial State
         self.serial_conn = None
@@ -29,6 +29,7 @@ class SimpleGroundStationGUI:
         self.ACCENT_RED = "#f38ba8"
         self.ACCENT_BLUE = "#89b4fa"
         self.ACCENT_YELLOW = "#f9e2af"
+        self.ACCENT_CYAN = "#94e2d5"
         self.LOG_BG = "#11111b"
 
         self.root.configure(bg=self.BG_COLOR)
@@ -46,7 +47,7 @@ class SimpleGroundStationGUI:
 
     def _build_ui(self):
         # --- HEADER ---
-        header_frame = tk.Frame(self.root, bg=self.BG_COLOR, pady=12)
+        header_frame = tk.Frame(self.root, bg=self.BG_COLOR, pady=10)
         header_frame.pack(fill=tk.X, padx=20)
 
         title_lbl = tk.Label(
@@ -56,17 +57,17 @@ class SimpleGroundStationGUI:
         title_lbl.pack(anchor="w")
 
         subtitle_lbl = tk.Label(
-            header_frame, text="Preset Audio Settings: 2000 Hz | 80% Intensity (Pin D22)",
+            header_frame, text="Preset Audio & RC Interference Filter Controller (Pin D22)",
             font=("Segoe UI", 9, "italic"), bg=self.BG_COLOR, fg=self.SUBTEXT_COLOR
         )
         subtitle_lbl.pack(anchor="w")
 
         # --- SERIAL CONNECTION CARD ---
-        conn_card = tk.Frame(self.root, bg=self.CARD_BG, bd=0, relief="flat", padx=15, pady=12)
-        conn_card.pack(fill=tk.X, padx=20, pady=6)
+        conn_card = tk.Frame(self.root, bg=self.CARD_BG, bd=0, relief="flat", padx=15, pady=10)
+        conn_card.pack(fill=tk.X, padx=20, pady=4)
 
-        conn_title = tk.Label(conn_card, text="🔌 Serial USB Connection", font=("Segoe UI", 10, "bold"), bg=self.CARD_BG, fg=self.TEXT_COLOR)
-        conn_title.grid(row=0, column=0, columnspan=3, sticky="w", pady=(0, 8))
+        conn_title = tk.Label(conn_card, text="Serial USB Connection", font=("Segoe UI", 10, "bold"), bg=self.CARD_BG, fg=self.TEXT_COLOR)
+        conn_title.grid(row=0, column=0, columnspan=3, sticky="w", pady=(0, 6))
 
         tk.Label(conn_card, text="COM Port:", bg=self.CARD_BG, fg=self.TEXT_COLOR).grid(row=1, column=0, sticky="w")
 
@@ -74,7 +75,7 @@ class SimpleGroundStationGUI:
         self.port_combo.grid(row=1, column=1, padx=8, sticky="w")
 
         self.btn_refresh = tk.Button(
-            conn_card, text="🔄", command=self.refresh_ports,
+            conn_card, text="REFRESH", command=self.refresh_ports,
             bg="#313244", fg=self.TEXT_COLOR, activebackground="#45475a", bd=0, padx=8, pady=2, cursor="hand2"
         )
         self.btn_refresh.grid(row=1, column=2, sticky="w")
@@ -84,37 +85,76 @@ class SimpleGroundStationGUI:
             font=("Segoe UI", 9, "bold"), bg=self.ACCENT_BLUE, fg="#11111b",
             activebackground="#74c7ec", bd=0, pady=5, cursor="hand2"
         )
-        self.btn_connect.grid(row=2, column=0, columnspan=3, sticky="ew", pady=(10, 0))
+        self.btn_connect.grid(row=2, column=0, columnspan=3, sticky="ew", pady=(8, 0))
 
-        self.lbl_status = tk.Label(conn_card, text="🔴 Disconnected", font=("Segoe UI", 9, "bold"), bg=self.CARD_BG, fg=self.ACCENT_RED)
-        self.lbl_status.grid(row=3, column=0, columnspan=3, pady=(6, 0))
+        self.lbl_status = tk.Label(conn_card, text="Disconnected", font=("Segoe UI", 9, "bold"), bg=self.CARD_BG, fg=self.ACCENT_RED)
+        self.lbl_status.grid(row=3, column=0, columnspan=3, pady=(4, 0))
+
+        # --- RC RECEIVER NOISE FILTER SETUP CARD ---
+        filter_card = tk.Frame(self.root, bg=self.CARD_BG, bd=0, relief="flat", padx=15, pady=10)
+        filter_card.pack(fill=tk.X, padx=20, pady=4)
+
+        tk.Label(filter_card, text="RC Receiver Interference Noise Filter", font=("Segoe UI", 10, "bold"), bg=self.CARD_BG, fg=self.ACCENT_CYAN).grid(row=0, column=0, columnspan=4, sticky="w", pady=(0, 6))
+
+        tk.Label(filter_card, text="Filter Type:", bg=self.CARD_BG, fg=self.TEXT_COLOR).grid(row=1, column=0, sticky="w")
+        self.combo_rc_filter = ttk.Combobox(filter_card, state="readonly", width=24, values=[
+            "0: Desativado (Raw)",
+            "1: Média Móvel Simples (SMA)",
+            "2: Média Móvel Exponencial (EMA)",
+            "3: Média Móvel Ponderada (WMA)"
+        ])
+        self.combo_rc_filter.current(1)
+        self.combo_rc_filter.grid(row=1, column=1, columnspan=3, sticky="w", padx=4, pady=2)
+
+        tk.Label(filter_card, text="Window (N):", bg=self.CARD_BG, fg=self.TEXT_COLOR).grid(row=2, column=0, sticky="w", pady=4)
+        self.entry_rc_win = tk.Entry(filter_card, width=6, bg=self.LOG_BG, fg=self.TEXT_COLOR, insertbackground=self.TEXT_COLOR)
+        self.entry_rc_win.insert(0, "5")
+        self.entry_rc_win.grid(row=2, column=1, sticky="w", padx=4, pady=4)
+
+        tk.Label(filter_card, text="Alpha (EMA):", bg=self.CARD_BG, fg=self.TEXT_COLOR).grid(row=2, column=2, sticky="w", padx=(10, 2), pady=4)
+        self.spin_rc_alpha = tk.Spinbox(filter_card, from_=0.05, to=1.00, increment=0.05, width=5, bg=self.LOG_BG, fg=self.TEXT_COLOR, insertbackground=self.TEXT_COLOR)
+        self.spin_rc_alpha.delete(0, tk.END); self.spin_rc_alpha.insert(0, "0.33")
+        self.spin_rc_alpha.grid(row=2, column=3, sticky="w", padx=4, pady=4)
+
+        self.btn_apply_filter = tk.Button(
+            filter_card, text="APPLY RC FILTER SETTINGS", command=self.apply_rc_filter,
+            font=("Segoe UI", 9, "bold"), bg=self.ACCENT_GREEN, fg="#11111b",
+            activebackground="#a6e3a1", bd=0, pady=4, cursor="hand2", state="disabled"
+        )
+        self.btn_apply_filter.grid(row=3, column=0, columnspan=4, sticky="ew", pady=(6, 0))
 
         # --- BUZZER CONTROL ACTIONS CARD ---
-        ctrl_card = tk.Frame(self.root, bg=self.CARD_BG, bd=0, relief="flat", padx=15, pady=15)
-        ctrl_card.pack(fill=tk.X, padx=20, pady=8)
+        ctrl_card = tk.Frame(self.root, bg=self.CARD_BG, bd=0, relief="flat", padx=15, pady=10)
+        ctrl_card.pack(fill=tk.X, padx=20, pady=4)
 
-        tk.Label(ctrl_card, text="🔔 Buzzer Controls", font=("Segoe UI", 10, "bold"), bg=self.CARD_BG, fg=self.TEXT_COLOR).pack(anchor="w", pady=(0, 10))
+        tk.Label(ctrl_card, text="Buzzer Controls", font=("Segoe UI", 10, "bold"), bg=self.CARD_BG, fg=self.TEXT_COLOR).pack(anchor="w", pady=(0, 6))
 
         actions_frame = tk.Frame(ctrl_card, bg=self.CARD_BG)
         actions_frame.pack(fill=tk.X)
 
         self.btn_continuous = tk.Button(
-            actions_frame, text="🔊 Continuous Beep", command=self.set_continuous,
-            font=("Segoe UI", 10, "bold"), bg="#45475a", fg=self.TEXT_COLOR, bd=0, pady=12, state="disabled", cursor="hand2"
+            actions_frame, text="Continuous Beep", command=self.set_continuous,
+            font=("Segoe UI", 9, "bold"), bg="#45475a", fg=self.TEXT_COLOR, bd=0, pady=8, state="disabled", cursor="hand2"
         )
-        self.btn_continuous.grid(row=0, column=0, padx=4, pady=4, sticky="nsew")
+        self.btn_continuous.grid(row=0, column=0, padx=4, pady=2, sticky="nsew")
 
         self.btn_intermittent = tk.Button(
-            actions_frame, text="⏱️ Intermittent Beep", command=self.set_intermittent,
-            font=("Segoe UI", 10, "bold"), bg="#45475a", fg=self.TEXT_COLOR, bd=0, pady=12, state="disabled", cursor="hand2"
+            actions_frame, text="Intermittent Beep", command=self.set_intermittent,
+            font=("Segoe UI", 9, "bold"), bg="#45475a", fg=self.TEXT_COLOR, bd=0, pady=8, state="disabled", cursor="hand2"
         )
-        self.btn_intermittent.grid(row=0, column=1, padx=4, pady=4, sticky="nsew")
+        self.btn_intermittent.grid(row=0, column=1, padx=4, pady=2, sticky="nsew")
 
         self.btn_off = tk.Button(
-            actions_frame, text="⏹️ Turn OFF", command=self.set_off,
-            font=("Segoe UI", 10, "bold"), bg="#45475a", fg=self.TEXT_COLOR, bd=0, pady=12, state="disabled", cursor="hand2"
+            actions_frame, text="Turn OFF", command=self.set_off,
+            font=("Segoe UI", 9, "bold"), bg="#45475a", fg=self.TEXT_COLOR, bd=0, pady=8, state="disabled", cursor="hand2"
         )
-        self.btn_off.grid(row=1, column=0, columnspan=2, padx=4, pady=4, sticky="nsew")
+        self.btn_off.grid(row=1, column=0, columnspan=2, padx=4, pady=2, sticky="nsew")
+
+        self.btn_calib_trim = tk.Button(
+            actions_frame, text="Calibrate Radio Neutrals", command=self.calibrate_trim,
+            font=("Segoe UI", 9, "bold"), bg=self.ACCENT_YELLOW, fg="#11111b", bd=0, pady=8, state="disabled", cursor="hand2"
+        )
+        self.btn_calib_trim.grid(row=2, column=0, columnspan=2, padx=4, pady=2, sticky="nsew")
 
         actions_frame.columnconfigure(0, weight=1)
         actions_frame.columnconfigure(1, weight=1)
@@ -162,7 +202,7 @@ class SimpleGroundStationGUI:
                 self.serial_conn = serial.Serial(port_name, 115200, timeout=1)
                 self.is_connected = True
                 self.btn_connect.config(text="Disconnect", bg=self.ACCENT_RED)
-                self.lbl_status.config(text=f"🟢 Connected ({port_name})", fg=self.ACCENT_GREEN)
+                self.lbl_status.config(text=f"Connected ({port_name})", fg=self.ACCENT_GREEN)
                 self._set_buttons_state("normal")
                 self.log(f"[CONNECTION] Successfully connected to {port_name}.")
 
@@ -188,13 +228,31 @@ class SimpleGroundStationGUI:
                 pass
 
         self.btn_connect.config(text="Connect", bg=self.ACCENT_BLUE)
-        self.lbl_status.config(text="🔴 Disconnected", fg=self.ACCENT_RED)
+        self.lbl_status.config(text="Disconnected", fg=self.ACCENT_RED)
         self._set_buttons_state("disabled")
         self.log("[CONNECTION] Disconnected.")
 
     def _set_buttons_state(self, state):
-        for btn in [self.btn_continuous, self.btn_intermittent, self.btn_off]:
+        for btn in [self.btn_continuous, self.btn_intermittent, self.btn_off, self.btn_calib_trim, self.btn_apply_filter]:
             btn.config(state=state)
+
+    def calibrate_trim(self):
+        self.send_cmd("CALIB_TRIM")
+        messagebox.showinfo("Calibration", "CALIB_TRIM command sent to ESP32 MANTA!")
+
+    def apply_rc_filter(self):
+        try:
+            val_str = self.combo_rc_filter.get()
+            f_type = int(val_str.split(":")[0])
+            w_size = int(self.entry_rc_win.get().strip())
+            alpha = float(self.spin_rc_alpha.get())
+            alpha_int = int(round(alpha * 100))
+            cmd = f"SET_RC_FILTER:{f_type}:{w_size}:{alpha_int}"
+            self.send_cmd(cmd)
+            f_names = ["RAW", "SMA", "EMA", "WMA"]
+            messagebox.showinfo("RC Filter Config", f"Sent filter update to MANTA:\nType: {f_names[f_type]}\nWindow N: {w_size}\nAlpha: {alpha:.2f}")
+        except Exception as e:
+            messagebox.showerror("Filter Config Error", f"Invalid parameters: {e}")
 
     def send_cmd(self, cmd_str):
         if self.is_connected and self.serial_conn and self.serial_conn.is_open:
