@@ -71,7 +71,7 @@ def get_random_dgt_image():
 
 
 def play_geoguessr():
-    print("🚀 Starting DGT Drone Simulator (With Quality Filter)...")
+    print("Starting DGT Drone Simulator (With Quality Filter)...")
 
     # Configure OpenCV for a small and tidy window (400x400)
     cv2.namedWindow("Drone GeoGuessr - DGT", cv2.WINDOW_NORMAL)
@@ -97,7 +97,7 @@ def play_geoguessr():
         while img is None:
             img, lat, lon = get_random_dgt_image()
 
-        print(f"🌍 PHOTO FOUND! Exact center: Latitude {lat:.5f}, Longitude {lon:.5f}")
+        print(f"PHOTO FOUND! Exact center: Latitude {lat:.5f}, Longitude {lon:.5f}")
         print("-> Click on the image to simulate the next flight or press 'q' to exit.")
 
         cv2.imshow("Drone GeoGuessr - DGT", img)

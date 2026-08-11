@@ -43,11 +43,11 @@ def load_database():
                     db['vectors'] = db.pop('vetores')
                 if 'coordenadas' in db:
                     db['coordinates'] = db.pop('coordenadas')
-                print(f"📂 Map loaded! {len(db['vectors'])} areas (Mega Signatures 5x5) already known.")
+                print(f"Map loaded! {len(db['vectors'])} areas (Mega Signatures 5x5) already known.")
                 return db
             except EOFError:
                 pass
-    print("🌱 New database created.")
+    print("New database created.")
     return {"vectors": [], "coordinates": []}
 
 
@@ -69,7 +69,7 @@ def calculate_distance_km(lat1, lon1, lat2, lon2):
     return R * c
 
 
-print(f"🧠 Loading MobileNetV2... (Ultra-Light Mode: 224x224)")
+print(f"Loading MobileNetV2... (Ultra-Light Mode: 224x224)")
 base_model = tf.keras.applications.MobileNetV2(
     input_shape=(224, 224, 3), include_top=False, weights='imagenet'
 )
@@ -200,20 +200,20 @@ def play_geoguessr():
     cv2.namedWindow("Dashboard SLAM", cv2.WINDOW_NORMAL)
     cv2.resizeWindow("Dashboard SLAM", 1200, 600)
 
-    print("\n🚀 Starting preloading Thread (Background Download with Queue of 10)...")
+    print("\nStarting preloading Thread (Background Download with Queue of 10)...")
     thread_download = threading.Thread(target=thread_download_images, daemon=True)
     thread_download.start()
 
-    print("📡 Establishing connection to DGT", end="")
+    print("Establishing connection to DGT", end="")
     while image_queue.empty():
         print(".", end="", flush=True)
         time.sleep(0.5)
 
-    print("\n🚀 Peripheral 5x5 Mission starting at MAXIMUM SPEED... (CTRL+C to stop)")
+    print("\nPeripheral 5x5 Mission starting at MAXIMUM SPEED... (CTRL+C to stop)")
 
     while True:
         img_original, lat_real, lon_real = image_queue.get()
-        print(f"\n✅ Macro-area (5x5) received! (Remaining images in buffer: {image_queue.qsize()})")
+        print(f"\nMacro-area (5x5) received! (Remaining images in buffer: {image_queue.qsize()})")
 
         img_filtered = apply_clahe_filter(img_original)
 
@@ -246,8 +246,8 @@ def play_geoguessr():
             lat_predicted, lon_predicted = db["coordinates"][winning_index]
 
             error_km = calculate_distance_km(lat_real, lon_real, lat_predicted, lon_predicted)
-            print(f"🌍 Real: {lat_real:.5f}, {lon_real:.5f} | Predicted: {lat_predicted:.5f}, {lon_predicted:.5f}")
-            print(f"📏 ERROR: {error_km:.2f} km")
+            print(f"Real: {lat_real:.5f}, {lon_real:.5f} | Predicted: {lat_predicted:.5f}, {lon_predicted:.5f}")
+            print(f"ERROR: {error_km:.2f} km")
 
             error_history.append(error_km)
             num_errors = len(error_history)
@@ -260,13 +260,13 @@ def play_geoguessr():
                 db["coordinates"].append((lat_real, lon_real))
                 save_database(db)
             else:
-                print("✅ Mega-Signature known (Error < 200m).")
+                print("Mega-Signature known (Error < 200m).")
         else:
-            print("\n🌍 First macro-area acquired. Starting the map...")
+            print("\nFirst macro-area acquired. Starting the map...")
             db["vectors"].append(mega_signature_vector)
             db["coordinates"].append((lat_real, lon_real))
             save_database(db)
-            print("💾 Starting point saved.")
+            print("Starting point saved.")
 
         # -------------------------------------------------------------
         # UI / DASHBOARD: CLEAN IMAGE WITH HIGH DENSITY (INTER_AREA)

@@ -53,11 +53,11 @@ def load_database():
                     db['vectors'] = db.pop('vetores')
                 if 'coordenadas' in db:
                     db['coordinates'] = db.pop('coordenadas')
-                print(f"📂 Map loaded! {len(db['vectors'])} signatures (3x3) known.")
+                print(f"Map loaded! {len(db['vectors'])} signatures (3x3) known.")
                 return db
             except EOFError:
                 pass
-    print("🌱 New database created.")
+    print("New database created.")
     return {"vectors": [], "coordinates": []}
 
 
@@ -69,7 +69,7 @@ def save_database(db):
 # =========================================================
 # 2. AI AND IMAGE PROCESSING
 # =========================================================
-print(f"🧠 Loading MobileNetV2... (Ultra-Light Mode: 224x224)")
+print(f"Loading MobileNetV2... (Ultra-Light Mode: 224x224)")
 base_model = tf.keras.applications.MobileNetV2(
     input_shape=(224, 224, 3), include_top=False, weights='imagenet'
 )
@@ -77,7 +77,7 @@ inputs = tf.keras.Input(shape=(224, 224, 3))
 x = base_model(inputs, training=False)
 outputs = tf.keras.layers.GlobalAveragePooling2D()(x)
 extractor = tf.keras.Model(inputs, outputs)
-print("✅ Brain optimized and ready to fly.")
+print("Brain optimized and ready to fly.")
 
 
 def calculate_pixel_error(x1, y1, x2, y2):
@@ -92,15 +92,15 @@ def augment_patch(patch):
 
 def load_giant_image():
     if not os.path.exists(IMG_PATH):
-        print(f"\n❌ CRITICAL ERROR: The file '{IMG_PATH}' was not found.")
+        print(f"\nCRITICAL ERROR: The file '{IMG_PATH}' was not found.")
         sys.exit(1)
 
     img = cv2.imread(IMG_PATH)
     if img is None:
-        print(f"\n❌ CRITICAL ERROR: The file '{IMG_PATH}' exists, but OpenCV could not read it.")
+        print(f"\nCRITICAL ERROR: The file '{IMG_PATH}' exists, but OpenCV could not read it.")
         sys.exit(1)
 
-    print(f"🗺️ Giant Image loaded successfully! Resolution: {img.shape[1]}x{img.shape[0]}")
+    print(f"Giant Image loaded successfully! Resolution: {img.shape[1]}x{img.shape[0]}")
     return img
 
 
@@ -213,7 +213,7 @@ def play_geoguessr_local():
     cv2.setWindowProperty("Dashboard SLAM Local", cv2.WND_PROP_TOPMOST, 1)
     cv2.waitKey(1)
 
-    print(f"\n🚀 Exploratory Mission Started! [TURBO_MODE = {TURBO_MODE}] (Press 'Q' on the window to exit)")
+    print(f"\nExploratory Mission Started! [TURBO_MODE = {TURBO_MODE}] (Press 'Q' on the window to exit)")
 
     while True:
         iteration_counter += 1
@@ -263,8 +263,8 @@ def play_geoguessr_local():
             if TURBO_MODE and iteration_counter % UPDATE_FREQ == 0:
                 print(f"[Iteration {iteration_counter}] ERROR: {error_pixels:.1f} pixels")
             elif not TURBO_MODE:
-                print(f"\n🌍 Real: (X:{center_x}, Y:{center_y}) | Predicted: (X:{x_predicted}, Y:{y_predicted})")
-                print(f"📏 ERROR: {error_pixels:.1f} pixels")
+                print(f"\nReal: (X:{center_x}, Y:{center_y}) | Predicted: (X:{x_predicted}, Y:{y_predicted})")
+                print(f"ERROR: {error_pixels:.1f} pixels")
 
             error_history.append(error_pixels)
 
@@ -273,7 +273,7 @@ def play_geoguessr_local():
                 db["coordinates"].append((center_x, center_y))
                 save_database(db)
         else:
-            print("\n🌍 First crop extracted. Starting the map...")
+            print("\nFirst crop extracted. Starting the map...")
             db["vectors"].append(mega_signature_vector)
             db["coordinates"].append((center_x, center_y))
             save_database(db)

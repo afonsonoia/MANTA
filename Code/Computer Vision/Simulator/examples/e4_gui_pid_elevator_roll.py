@@ -168,7 +168,7 @@ class MainWindow(QMainWindow):
         self.layout.addWidget(group_targets)
 
         # --- UPLOAD BUTTON ---
-        self.btn_update = QPushButton("🚀 UPLOAD TARGETS TO VEHICLE")
+        self.btn_update = QPushButton("UPLOAD TARGETS TO VEHICLE")
         self.btn_update.setStyleSheet("background-color: darkorange; color: white; font-weight: bold; font-size: 14px; padding: 15px;")
         self.btn_update.clicked.connect(self.send_targets_to_plane)
         self.layout.addWidget(self.btn_update)
