@@ -29,7 +29,7 @@ def test_manta_esp32_firmware_compilation():
     """Verifies that MANTA ESP32 firmware compiles with PlatformIO without errors."""
     assert os.path.exists(MANTA_ESP32_DIR), f"MANTA_ESP32 directory not found at {MANTA_ESP32_DIR}"
     cmd = [sys.executable, "-m", "platformio", "run"]
-    result = subprocess.run(cmd, cwd=MANTA_ESP32_DIR, capture_output=True, text=True)
+    result = subprocess.run(cmd, cwd=MANTA_ESP32_DIR, capture_output=True, text=True, timeout=300)
     assert result.returncode == 0, (
         f"MANTA ESP32 firmware compilation failed with exit code {result.returncode}:\n"
         f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
@@ -37,10 +37,10 @@ def test_manta_esp32_firmware_compilation():
 
 
 def test_ground_station_esp32_firmware_compilation():
-    """Verifies that Ground Station ESP32 firmware compiles with PlatformIO without errors."""
+    """Verifies that Ground Station ESP32 receiver firmware compiles with PlatformIO without errors."""
     assert os.path.exists(GROUND_STATION_DIR), f"GROUND-STATION directory not found at {GROUND_STATION_DIR}"
     cmd = [sys.executable, "-m", "platformio", "run"]
-    result = subprocess.run(cmd, cwd=GROUND_STATION_DIR, capture_output=True, text=True)
+    result = subprocess.run(cmd, cwd=GROUND_STATION_DIR, capture_output=True, text=True, timeout=300)
     assert result.returncode == 0, (
         f"Ground Station ESP32 firmware compilation failed with exit code {result.returncode}:\n"
         f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
