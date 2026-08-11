@@ -111,20 +111,30 @@ The Ground Station hardware acts as the physical telemetry link between the airc
 - [x] Mount core avionics and electronics on the airframe (Raspberry Pi & camera deferred for visual localization phase).
 - [x] Conduct EMI (Electromagnetic Interference) testing to ensure motors/ESCs don't disrupt the GPS or LoRa signals.
 - [x] Execute maiden field test in manual flight mode to validate airframe aerodynamics and real-time ground station telemetry streaming.
-- [ ] Design and build a sturdy, custom mount for the Raspberry Pi camera module (deferred until visual localization phase).
+- [ ] Conduct extensive field flight tests to build pilot confidence, resolve sensor edge cases, and ensure hardware solidness before advancing to Phase 3.
 
-### Phase 3: Software, Autopilot & Path-Planning
-- [ ] Integrate IMU (MPU6050) Kalman/Complementary filtering into low-level ESP32 firmware.
-- [ ] Implement robust pitch (elevator) and roll (aileron) stabilization PIDs.
-- [ ] Perform static PID tuning on a test rig (without flying) to evaluate control surface responsiveness.
-- [ ] Set up ESP32-to-Raspberry Pi serial communication protocol (UART/MAVLink-like packets).
-- [ ] Implement high-level LoRa telemetry control (e.g., "go to waypoint X").
-- [ ] Develop and integrate an autonomous path-planning algorithm.
+### Phase 3: Flight Control & Fly-By-Wire Stabilization
+- [ ] Integrate IMU (MPU6050) Complementary/Kalman filtering into low-level ESP32 firmware for real-time attitude estimation.
+- [ ] Implement and calibrate closed-loop PID controllers for Roll (ailerons/elevons), Pitch (elevator/elevons), and Yaw.
+- [ ] Perform static PID tuning on a test rig to evaluate control surface responsiveness and anti-windup.
+- [ ] Conduct field flight tests to calibrate PIDs for smooth, wind-resistant fly-by-wire leveling and stability.
+- [ ] Execute extensive flight testing under varied weather conditions to thoroughly validate closed-loop stability and control solidness before moving to Phase 4.
 
-### Phase 4: Ground Station & Virtual FPV
-- [ ] Implement a basic Virtual FPV on the ground station (using telemetry, altitude, coordinates, and 3D maps) to artificially generate the pilot's view for terrain avoidance.
-- [ ] Enhance Virtual FPV by streaming additional camera/sensor data to realistically detect and display obstacles like trees.
-- [ ] Conduct field tests to evaluate LoRa telemetry maximum range, packet loss, and Virtual FPV rendering latency.
+### Phase 4: Autonomous Waypoint Navigation & LoRa Path-Planning
+- [ ] Implement interactive trajectory planner in PC Ground Station UI to select waypoints (e.g., 5-point flight path) on a map.
+- [ ] Transmit pre-planned path coordinates from Mission Planner to aircraft over LoRa wireless link.
+- [ ] Develop onboard navigation controller fusing GPS, BMP280 barometric altitude, and IMU data.
+- [ ] Validate autonomous waypoint-to-waypoint navigation, altitude hold, heading lock, and fail-safe Return-to-Home (RTH).
+- [ ] Execute extensive autonomous field flight missions to rigorously verify trajectory accuracy and fail-safe reliability prior to Phase 5.
+
+### Phase 5: Onboard Vision & Companion Computer Integration (Raspberry Pi)
+- [ ] Design custom mount and install Raspberry Pi 3 A+ companion computer and camera module on airframe.
+- [ ] Set up ESP32-to-Raspberry Pi high-speed serial communication protocol (UART / MAVLink-like packets).
+- [ ] Execute onboard high-rate image/sensor data logging and telemetry synchronization.
+- [ ] Deploy lightweight Visual Place Recognition (VPR) for image-based GPS-denied position estimation.
+- [ ] Develop computer vision pipelines for visual horizon detection and landmark/mountain recognition (matching camera imagery with elevation map databases for visual localization).
+- [ ] Test real-time object detection and visual perception during autonomous flight.
+- [ ] Perform comprehensive flight validation campaigns to evaluate vision-based localization precision and system integration under real operational conditions.
 
 ### Long-Term Research Directions
 - Visual-Inertial State Estimation
