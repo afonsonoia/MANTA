@@ -8,7 +8,7 @@
 
 **Rather than being a commercial autopilot, MANTA is intended as an experimental platform for developing, testing and validating embedded perception and autonomous navigation algorithms under real flight conditions.**
 
-**Current Development:** Preparing the aircraft for its first manual flight tests.
+**Current Development:** Conducting flight tests to build pilot confidence and airframe handling familiarity, while debugging minor sensor telemetry issues identified during maiden flights.
 
 > *Fun Fact: The name **MANTA** is a regional term from Madeira Island, Portugal. It refers to the local population of the Common Buzzard (*Buteo buteo rothschildi*), a resident subspecies frequently seen soaring above the island's mountains.*
 
@@ -62,9 +62,10 @@ The project is structured as follows:
 *   **Voltage Sensor Calibration**: Experimentally determined the conversion function for raw ADC voltage sensor data in the ESP32 firmware, enabling accurate battery voltage measurements.
 *   **Initial LoRa Communication**: Established initial bidirectional LoRa communication between the aircraft (MANTA ESP32) and the ground station, streaming live battery telemetry and RSSI/SNR signal metrics while receiving ESC control commands.
 *   **Visual Navigation**: Python POCs demonstrate lightweight deep feature extraction combined with visual place recognition to predict coordinates based on matching signatures.
-*   **Electronics**: The custom PCBs (utilizing a compact 2-board shield architecture) have been manufactured and assembled. We are currently finalizing the electrical integration on the airframe.
+*   **Electronics & Airframe Mounting**: Custom PCBs and core avionics (ESP32 flight controller, LoRa module, sensors, ESC, servos) are fully mounted on the aircraft. (Raspberry Pi and camera module mounting is deferred until flight control logic is solid and visual localization is needed).
+*   **Flight Testing**: Maiden manual flight tests successfully conducted to validate airframe aerodynamics, motor performance, control surface responsiveness, and live ground station telemetry.
 *   **Simulation**: Basic PyQt-based simulation setup created for autopilot PID tuning loops.
-*   **Next Steps**: Complete avionics mounting and prepare for maiden manual flight tests.
+*   **Next Steps**: Conduct additional flight tests to build pilot confidence, resolve remaining sensor bugs, and implement fly-by-wire stabilization loops (PIDs) for a solid, wind-resistant aircraft.
 
 ### Custom Manufactured PCBs
 
@@ -107,10 +108,10 @@ The Ground Station hardware acts as the physical telemetry link between the airc
 - [x] Assemble the PCB and perform physical continuity and power testing.
 - [x] Experimentally calibrate the raw voltage sensor conversion function to obtain accurate voltage readings from raw ADC data.
 - [x] Experimentally study and map the battery discharge curve under motor load using the calibrated voltage sensor.
-- [ ] Design and build a sturdy, custom mount for the Raspberry Pi camera module.
-- [ ] Mount avionics (ESP32, Raspberry Pi, camera, sensors) on the airframe.
-- [ ] Conduct EMI (Electromagnetic Interference) testing to ensure motors/ESCs don't disrupt the GPS or LoRa signals.
-- [ ] Execute maiden field test in manual flight mode to validate airframe aerodynamics and real-time ground station telemetry streaming.
+- [x] Mount core avionics and electronics on the airframe (Raspberry Pi & camera deferred for visual localization phase).
+- [x] Conduct EMI (Electromagnetic Interference) testing to ensure motors/ESCs don't disrupt the GPS or LoRa signals.
+- [x] Execute maiden field test in manual flight mode to validate airframe aerodynamics and real-time ground station telemetry streaming.
+- [ ] Design and build a sturdy, custom mount for the Raspberry Pi camera module (deferred until visual localization phase).
 
 ### Phase 3: Software, Autopilot & Path-Planning
 - [ ] Integrate IMU (MPU6050) Kalman/Complementary filtering into low-level ESP32 firmware.
