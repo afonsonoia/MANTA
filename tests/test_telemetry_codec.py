@@ -15,25 +15,21 @@ from telemetry_codec import encode_telemetry, decode_telemetry, calculate_crc16,
 def generate_random_telemetry():
     """Generates random valid telemetry inputs within operational flight ranges."""
     return {
-        "batteryVoltage": round(random.uniform(10.00, 18.00), 2),
-        "rawADC": round(random.uniform(2000.0, 4000.0), 1),
         "pitch": round(random.uniform(-45.0, 45.0), 1),
         "roll": round(random.uniform(-45.0, 45.0), 1),
-        "yaw": round(random.uniform(0.0, 359.9), 1),
-        "effectiveCutoff": round(random.uniform(12.00, 15.00), 2),
-        "deadband": random.randint(1, 50),
-        "lat": round(random.uniform(38.0000000, 39.0000000), 7),
-        "lon": round(random.uniform(-9.5000000, -8.5000000), 7),
+        "accel_x": random.randint(-4000, 4000),
+        "accel_y": random.randint(-4000, 4000),
+        "accel_z": random.randint(-5000, -3000),
+        "gyro_x": random.randint(-1000, 1000),
+        "gyro_y": random.randint(-1000, 1000),
+        "gyro_z": random.randint(-1000, 1000),
+        "rc1": random.randint(1000, 2000),
+        "rc2": random.randint(1000, 2000),
+        "rc3": random.randint(1000, 2000),
+        "rc5": random.choice([1000, 2000]),
+        "battery_v": round(random.uniform(10.00, 18.00), 2),
         "alt": round(random.uniform(0.0, 1000.0), 1),
-        "temp": round(random.uniform(-10.0, 50.0), 1),
-        "sats": random.randint(0, 20),
-        "fix": random.randint(0, 3),
-        "rch1": random.randint(1000, 2000),
-        "rch2": random.randint(1000, 2000),
-        "rch3": random.randint(1000, 2000),
-        "rch4": random.randint(1000, 2000),
-        "rch5": random.randint(1000, 2000),
-        "rcSignalLost": random.choice([True, False])
+        "rc_signal_lost": random.choice([True, False])
     }
 
 
@@ -45,15 +41,7 @@ def test_uncorrupted_packets_100_percent_acceptance_rate():
 
     for i in range(N_TESTS):
         orig = generate_random_telemetry()
-        valid_encoded = encode_telemetry(
-            batteryVoltage=orig["batteryVoltage"], rawADC=orig["rawADC"],
-            pitch=orig["pitch"], roll=orig["roll"], yaw=orig["yaw"],
-            effectiveCutoff=orig["effectiveCutoff"], deadband=orig["deadband"],
-            lat=orig["lat"], lon=orig["lon"], alt=orig["alt"], temp=orig["temp"],
-            sats=orig["sats"], fix=orig["fix"],
-            rch1=orig["rch1"], rch2=orig["rch2"], rch3=orig["rch3"], rch4=orig["rch4"], rch5=orig["rch5"],
-            rcSignalLost=orig["rcSignalLost"]
-        )
+        valid_encoded = encode_telemetry(**orig)
 
         decoded = decode_telemetry(valid_encoded)
         if decoded is not None:
@@ -72,28 +60,7 @@ def test_random_telemetry_fuzzing_500_iterations():
 
     for i in range(N_ITERATIONS):
         orig = generate_random_telemetry()
-        
-        encoded = encode_telemetry(
-            batteryVoltage=orig["batteryVoltage"],
-            rawADC=orig["rawADC"],
-            pitch=orig["pitch"],
-            roll=orig["roll"],
-            yaw=orig["yaw"],
-            effectiveCutoff=orig["effectiveCutoff"],
-            deadband=orig["deadband"],
-            lat=orig["lat"],
-            lon=orig["lon"],
-            alt=orig["alt"],
-            temp=orig["temp"],
-            sats=orig["sats"],
-            fix=orig["fix"],
-            rch1=orig["rch1"],
-            rch2=orig["rch2"],
-            rch3=orig["rch3"],
-            rch4=orig["rch4"],
-            rch5=orig["rch5"],
-            rcSignalLost=orig["rcSignalLost"]
-        )
+        encoded = encode_telemetry(**orig)
 
         assert len(encoded) == PACKET_SIZE, f"[Iteration {i+1}] Encoded packet size mismatch! Expected {PACKET_SIZE}, got {len(encoded)}"
 
@@ -101,21 +68,18 @@ def test_random_telemetry_fuzzing_500_iterations():
         assert decoded is not None, f"[Iteration {i+1}] Decoding returned None for valid packet!"
 
         # Assert exact field equality
-        assert decoded["batteryVoltage"] == pytest.approx(orig["batteryVoltage"], abs=0.01), f"[Iteration {i+1}] batteryVoltage mismatch"
-        assert decoded["rawADC"] == pytest.approx(orig["rawADC"], abs=0.1), f"[Iteration {i+1}] rawADC mismatch"
         assert decoded["pitch"] == pytest.approx(orig["pitch"], abs=0.1), f"[Iteration {i+1}] pitch mismatch"
         assert decoded["roll"] == pytest.approx(orig["roll"], abs=0.1), f"[Iteration {i+1}] roll mismatch"
-        assert decoded["yaw"] == pytest.approx(orig["yaw"], abs=0.1), f"[Iteration {i+1}] yaw mismatch"
-        assert decoded["effectiveCutoff"] == pytest.approx(orig["effectiveCutoff"], abs=0.01), f"[Iteration {i+1}] effectiveCutoff mismatch"
-        assert decoded["deadband"] == orig["deadband"], f"[Iteration {i+1}] deadband mismatch"
-        assert decoded["lat"] == pytest.approx(orig["lat"], abs=1e-7), f"[Iteration {i+1}] lat mismatch"
-        assert decoded["lon"] == pytest.approx(orig["lon"], abs=1e-7), f"[Iteration {i+1}] lon mismatch"
+        assert decoded["accel_x"] == orig["accel_x"], f"[Iteration {i+1}] accel_x mismatch"
+        assert decoded["accel_y"] == orig["accel_y"], f"[Iteration {i+1}] accel_y mismatch"
+        assert decoded["accel_z"] == orig["accel_z"], f"[Iteration {i+1}] accel_z mismatch"
+        assert decoded["gyro_x"] == orig["gyro_x"], f"[Iteration {i+1}] gyro_x mismatch"
+        assert decoded["gyro_y"] == orig["gyro_y"], f"[Iteration {i+1}] gyro_y mismatch"
+        assert decoded["gyro_z"] == orig["gyro_z"], f"[Iteration {i+1}] gyro_z mismatch"
+        assert decoded["rc"] == [orig["rc1"], orig["rc2"], orig["rc3"], orig["rc5"]], f"[Iteration {i+1}] RC channels mismatch"
+        assert decoded["batteryVoltage"] == pytest.approx(orig["battery_v"], abs=0.01), f"[Iteration {i+1}] batteryVoltage mismatch"
         assert decoded["alt"] == pytest.approx(orig["alt"], abs=0.1), f"[Iteration {i+1}] alt mismatch"
-        assert decoded["temp"] == pytest.approx(orig["temp"], abs=0.1), f"[Iteration {i+1}] temp mismatch"
-        assert decoded["sats"] == orig["sats"], f"[Iteration {i+1}] sats mismatch"
-        assert decoded["fix"] == orig["fix"], f"[Iteration {i+1}] fix mismatch"
-        assert decoded["rc"] == [orig["rch1"], orig["rch2"], orig["rch3"], orig["rch4"], orig["rch5"]], f"[Iteration {i+1}] RC channels mismatch"
-        assert decoded["rcSignalLost"] == orig["rcSignalLost"], f"[Iteration {i+1}] rcSignalLost mismatch"
+        assert decoded["rcSignalLost"] == orig["rc_signal_lost"], f"[Iteration {i+1}] rcSignalLost mismatch"
 
     print(f"[CI/CD Telemetry Codec Test] SUCCESS: All {N_ITERATIONS} randomized telemetry packets matched 100% perfectly!")
 
@@ -129,21 +93,13 @@ def test_single_and_multi_bit_corruption_detection():
 
     for i in range(N_TESTS):
         orig = generate_random_telemetry()
-        valid_encoded = bytearray(encode_telemetry(
-            batteryVoltage=orig["batteryVoltage"], rawADC=orig["rawADC"],
-            pitch=orig["pitch"], roll=orig["roll"], yaw=orig["yaw"],
-            effectiveCutoff=orig["effectiveCutoff"], deadband=orig["deadband"],
-            lat=orig["lat"], lon=orig["lon"], alt=orig["alt"], temp=orig["temp"],
-            sats=orig["sats"], fix=orig["fix"],
-            rch1=orig["rch1"], rch2=orig["rch2"], rch3=orig["rch3"], rch4=orig["rch4"], rch5=orig["rch5"],
-            rcSignalLost=orig["rcSignalLost"]
-        ))
+        valid_encoded = bytearray(encode_telemetry(**orig))
 
         # Select random number of bits to corrupt (from 1 to 20 bits)
         n_corrupt_bits = random.randint(1, 20)
         corrupted_encoded = bytearray(valid_encoded)
 
-        # Pick distinct bit positions across the 42-byte (336 bits) payload
+        # Pick distinct bit positions across the payload
         total_bits = len(valid_encoded) * 8
         bit_indices = random.sample(range(total_bits), n_corrupt_bits)
 
@@ -167,15 +123,7 @@ def test_burst_noise_and_block_corruption():
 
     for i in range(N_BURST_TESTS):
         orig = generate_random_telemetry()
-        valid_encoded = bytearray(encode_telemetry(
-            batteryVoltage=orig["batteryVoltage"], rawADC=orig["rawADC"],
-            pitch=orig["pitch"], roll=orig["roll"], yaw=orig["yaw"],
-            effectiveCutoff=orig["effectiveCutoff"], deadband=orig["deadband"],
-            lat=orig["lat"], lon=orig["lon"], alt=orig["alt"], temp=orig["temp"],
-            sats=orig["sats"], fix=orig["fix"],
-            rch1=orig["rch1"], rch2=orig["rch2"], rch3=orig["rch3"], rch4=orig["rch4"], rch5=orig["rch5"],
-            rcSignalLost=orig["rcSignalLost"]
-        ))
+        valid_encoded = bytearray(encode_telemetry(**orig))
 
         # Burst noise: overwrite 1 to 10 contiguous bytes (guaranteeing changed byte values)
         burst_len = random.randint(1, 10)
@@ -196,15 +144,16 @@ def test_invalid_packet_length_and_header():
     """Verifies that truncated packets or invalid headers are cleanly rejected."""
     assert decode_telemetry(b"") is None
     assert decode_telemetry(b"MT" + b"\x00" * 10) is None
-    assert decode_telemetry(b"XX" + b"\x00" * 40) is None
+    assert decode_telemetry(b"XX" + b"\x00" * 30) is None
 
 
-def test_negative_yaw_angle_codec_normalization():
-    """Verifies that negative yaw angles (e.g. -15.4 deg during left turn) are correctly normalized without wraparound."""
+def test_negative_pitch_roll_angle_codec():
+    """Verifies that negative pitch and roll angles (e.g. -15.4 deg pitch, -25.2 deg roll) are correctly encoded and decoded."""
     data = generate_random_telemetry()
-    data["yaw"] = -15.4
+    data["pitch"] = -15.4
+    data["roll"] = -25.2
     encoded = encode_telemetry(**data)
     decoded = decode_telemetry(encoded)
     assert decoded is not None
-    assert decoded["yaw"] == 344.6  # 360.0 - 15.4 = 344.6 deg
-
+    assert decoded["pitch"] == pytest.approx(-15.4, abs=0.1)
+    assert decoded["roll"] == pytest.approx(-25.2, abs=0.1)

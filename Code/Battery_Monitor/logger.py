@@ -10,7 +10,7 @@ from matplotlib.widgets import Slider, Button
 # Config
 ESP32_IP = '192.168.4.1'  # Default ESP32 Access Point IP
 PORT = 5005
-EXCEL_FILE = 'registo_bateria.xlsx'
+EXCEL_FILE = 'battery_log.xlsx'
 MAX_PLOT_POINTS = 100
 BATTERY_DIVIDER_RATIO = 4.84  # Voltage divider factor from battery_monitor.ino (4.84:1 ratio)
 

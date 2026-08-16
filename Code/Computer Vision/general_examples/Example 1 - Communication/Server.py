@@ -2,14 +2,14 @@ import socket
 
 # Config
 IP_PC = "0.0.0.0"
-PORTA = 5005
+PORT = 5005
 
 server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-server_socket.bind((IP_PC, PORTA))
+server_socket.bind((IP_PC, PORT))
 server_socket.listen(1)
 
-print(f"TCP server started at {IP_PC}:{PORTA}")
+print(f"TCP server started at {IP_PC}:{PORT}")
 print("Waiting for ESP32 connection...")
 
 try:
@@ -19,17 +19,17 @@ try:
 
         try:
             while True:
-                dados_brutos = client_socket.recv(1024)
+                raw_data = client_socket.recv(1024)
 
-                if not dados_brutos:
+                if not raw_data:
                     break  # Connection closed by client
 
-                mensagem = dados_brutos.decode('utf-8').strip()
+                message = raw_data.decode('utf-8').strip()
 
-                if mensagem:
-                    print(f"[RECEIVED] {mensagem}")
-                    resposta = "OK\n"
-                    client_socket.send(resposta.encode())
+                if message:
+                    print(f"[RECEIVED] {message}")
+                    response = "OK\n"
+                    client_socket.send(response.encode())
 
         except ConnectionResetError:
             print("[ERROR] ESP32 connection lost abruptly.")

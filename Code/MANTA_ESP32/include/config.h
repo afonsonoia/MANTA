@@ -15,50 +15,45 @@ constexpr int PIN_RC_CH4 = 32; // D32 (GPIO32)
 constexpr int PIN_RC_CH5 = 33; // D33 (GPIO33)
 
 // Servo Output Pins (V-Tail Airframe)
-constexpr int PIN_SERVO_BR = 13; // Back Right / Traseira Direita (GPIO13)
-constexpr int PIN_SERVO_BL = 14; // Back Left / Traseira Esquerda (GPIO14)
-constexpr int PIN_SERVO_FR = 27; // Front Right / Frontal Direita (GPIO27)
-constexpr int PIN_SERVO_FL = 26; // Front Left / Frontal Esquerda (GPIO26)
+constexpr int PIN_SERVO_BR = 13; // Back Right (GPIO13)
+constexpr int PIN_SERVO_BL = 14; // Back Left (GPIO14)
+constexpr int PIN_SERVO_FR = 27; // Front Right (GPIO27)
+constexpr int PIN_SERVO_FL = 26; // Front Left (GPIO26)
 
 // Control System Hysteresis & Thermal Protection Constants
 constexpr uint8_t DEFAULT_RC_MARGIN_DEADBAND =
-    20; // Default Hysteresis threshold in us (ignore PWM jitter < 20us)
+    18; // Hysteresis threshold in us (ignore PWM jitter < 18us)
 constexpr uint16_t DEFAULT_SERVO_MIN_UPDATE_INTERVAL_MS =
-    67; // Default 67ms interval between updates per servo (15 Hz)
+    67; // 67ms interval between servo updates (15 Hz max)
 constexpr unsigned long SERVO_KEEPALIVE_INTERVAL_MS =
     1000; // 1.0s (1000ms) keep-alive update heartbeat
 
 // Servo Rotation Angle Limits & Conversion Factors (Default +/-30 degrees)
-constexpr float US_PER_DEGREE = 11.11f;                 // ~11.11us per degree (1000us total span / 90 deg)
-constexpr uint8_t DEFAULT_SERVO_MAX_ANGLE_DEG = 30;     // Default +/- 30 degrees rotation limit (1167us - 1833us)
-
-
+constexpr float US_PER_DEGREE =
+    11.11f; // ~11.11us per degree (1000us total span / 90 deg)
+constexpr uint8_t DEFAULT_SERVO_MAX_ANGLE_DEG =
+    30; // Default +/- 30 degrees rotation limit (1167us - 1833us)
 
 // MPU6050 I2C Pin Configuration
 constexpr int PIN_SDA = 21; // MPU6050 SDA Pin D21
 constexpr int PIN_SCL = 22; // MPU6050 SCL Pin D22
-
-// GPS UART Pin Configuration
-// GPIO3 (RX0) / GPIO1 (TX0) — shared with USB Serial.
-// GPS cable must be disconnected when flashing via USB.
-// In flight (USB disconnected) GPIO3/1 are free for GPS NMEA at 9600 baud.
-constexpr int GPS_RX_PIN = 3;   // GPIO3 / RX0
-constexpr int GPS_TX_PIN = 1;   // GPIO1 / TX0
-constexpr long GPS_BAUD = 9600; // Standard NMEA GPS Baud Rate (9600)
 
 // LoRa Pin Configuration (VSPI & Control)
 constexpr int LORA_MOSI = 23;
 constexpr int LORA_MISO = 19;
 constexpr int LORA_SCK = 18;
 constexpr int LORA_CS = 5;
-constexpr int LORA_RST = -1;  // No dedicated RST pin! GPIO14 = PIN_SERVO_BL conflict avoided
+constexpr int LORA_RST =
+    -1; // RST not connected: avoids conflict with PIN_SERVO_BL on GPIO 14!
 constexpr int LORA_DIO0 = 4;
 
-// LoRa Short-Distance Communication Parameters
-constexpr long LORA_BAND = 433E6; // Frequency: 433 MHz (433E6)
-constexpr int LORA_TX_POWER = 17; // 17 dBm
-constexpr int LORA_SF = 8;      // Spreading Factor 8 (Optimal balance: +3dB sensitivity gain, high range & 4Hz 55ms airtime)
-constexpr long LORA_BW = 125E3; // Bandwidth 125 kHz
+// LoRa High-Speed Low-Power Parameters (~1.5km range @ ~6.2ms airtime)
+constexpr long LORA_BAND = 433E6; // Frequency: 433 MHz
+constexpr int LORA_TX_POWER =
+    17; // 17 dBm (50mW power-optimized output for 1.5km range)
+constexpr int LORA_SF = 7; // Spreading Factor 7 (Minimum latency & high speed)
+constexpr long LORA_BW = 250E3; // Bandwidth 250 kHz (High frequency offset
+                                // tolerance & fast ~12ms airtime)
 constexpr int LORA_CR = 5;      // Coding rate 4/5
 constexpr uint8_t LORA_SYNC_WORD = 0x12; // Matching LoRa Sync Word
 
@@ -74,9 +69,8 @@ constexpr float DEFAULT_CUTOFF_VOLTAGE =
 
 // High Frequency Sampling & Moving Average Filter Parameters
 constexpr unsigned long LOGGING_INTERVAL_MS =
-    250; // 0.25s (250ms = 4 Hz) LoRa telemetry broadcast interval in flight mode
-constexpr unsigned long CALIB_LOGGING_INTERVAL_MS =
-    2000; // 2.00s (2000ms = 0.5 Hz) LoRa telemetry broadcast interval in calibration mode (CH5 > 1900)
+    50; // 50ms = 20 Hz Telemetry Broadcast (High speed flight data for PID
+        // tuning)
 
 constexpr unsigned long SAMPLE_INTERVAL_MS =
     10; // High frequency IMU sampling every 10ms (100 Hz sampling)

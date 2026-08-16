@@ -90,6 +90,19 @@ The Ground Station hardware acts as the physical telemetry link between the airc
 * **ESP32 & LoRa Bridge**: Captures live wireless telemetry packets (battery state, RSSI/SNR signal levels, sensor telemetry) sent from the aircraft and streams them in real time to the PC Mission Planner software (`MANTA_MISSION_PLANNER.py`).
 * **Acoustic Warning System**: Features an integrated piezo buzzer programmed to emit loud audio alerts (beeps) during critical events, low battery states, or sudden signal loss, immediately warning the pilot of emergencies without requiring constant monitor surveillance.
 
+### IMU-Assisted Roll Envelope Protection (Fly-By-Wire Assist)
+
+The flight controller integrates an intelligent **attitude-aware roll limitation and auto-recovery flight assist** mode driven in real time by the 6-axis MPU6050 IMU (Mahony AHRS quaternion fusion):
+
+* **Direct Pilot Authority at Wings Level (0° Roll):** The pilot retains full ±20° rolleron control authority.
+* **Progressive Bank Angle Attenuation:** As the aircraft banks, the maximum roll command authority into the direction of the turn decreases linearly to prevent overbanking:
+  $$\text{Max Roll Authority} = 20^\circ \times \left(1 - \frac{|\text{Roll}|}{60^\circ}\right)$$
+  * At **30° Roll:** Maximum roll command into the bank is limited to **10°**.
+  * At **45° Roll:** Maximum roll command into the bank is limited to **5°**.
+  * At **60° Roll:** Pilot command into the bank is fully restricted (**0°**).
+* **Active Auto-Recovery Bias (>60° Bank Angle):** If the aircraft exceeds 60° of bank (e.g. 70° right), commands into the bank are overridden and the system automatically applies **5° of opposite recovery deflection** to level the wings, while preserving full pilot recovery stick authority.
+* **Transmitter Flight Mode Switch (CH5):** Selectable in real time via RC Channel 5 (`CH5 = 2000µs` enables Roll Envelope Assist; `CH5 = 1000µs` selects direct manual passthrough).
+
 ---
 
 ## Project Roadmap
@@ -114,7 +127,8 @@ The Ground Station hardware acts as the physical telemetry link between the airc
 - [ ] Conduct extensive field flight tests to build pilot confidence, resolve sensor edge cases, and ensure hardware solidness before advancing to Phase 3.
 
 ### Phase 3: Flight Control & Fly-By-Wire Stabilization
-- [ ] Integrate IMU (MPU6050) Complementary/Kalman filtering into low-level ESP32 firmware for real-time attitude estimation.
+- [x] Integrate IMU (MPU6050) Mahony AHRS quaternion sensor fusion into low-level ESP32 firmware for high-rate, low-drift attitude estimation.
+- [x] Implement IMU-assisted roll envelope protection and progressive bank angle limiting on RC Channel 5.
 - [ ] Implement and calibrate closed-loop PID controllers for Roll (ailerons/elevons), Pitch (elevator/elevons), and Yaw.
 - [ ] Perform static PID tuning on a test rig to evaluate control surface responsiveness and anti-windup.
 - [ ] Conduct field flight tests to calibrate PIDs for smooth, wind-resistant fly-by-wire leveling and stability.

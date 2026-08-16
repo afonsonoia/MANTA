@@ -98,10 +98,10 @@ class SimpleGroundStationGUI:
 
         tk.Label(filter_card, text="Filter Type:", bg=self.CARD_BG, fg=self.TEXT_COLOR).grid(row=1, column=0, sticky="w")
         self.combo_rc_filter = ttk.Combobox(filter_card, state="readonly", width=24, values=[
-            "0: Desativado (Raw)",
-            "1: Média Móvel Simples (SMA)",
-            "2: Média Móvel Exponencial (EMA)",
-            "3: Média Móvel Ponderada (WMA)"
+            "0: Disabled (Raw)",
+            "1: Simple Moving Average (SMA)",
+            "2: Exponential Moving Average (EMA)",
+            "3: Weighted Moving Average (WMA)"
         ])
         self.combo_rc_filter.current(1)
         self.combo_rc_filter.grid(row=1, column=1, columnspan=3, sticky="w", padx=4, pady=2)

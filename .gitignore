@@ -63,5 +63,11 @@ datasets/
 # Scratch & Test files
 # =========================
 scratch_*.py
-registo_bateria_lora.xlsx
+*.xlsx
+flight_logs/
+*.log
 compile_commands.json
+
+# Temporary IMU test project
+temp_imu_test/
+

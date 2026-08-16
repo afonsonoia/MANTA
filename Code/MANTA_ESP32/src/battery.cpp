@@ -57,9 +57,7 @@ void setCutoffThreshold(float targetVoltage) {
     targetVoltage = ABSOLUTE_MIN_CUTOFF_VOLTAGE;
   }
   if (configuredCutoffVoltage != targetVoltage) {
-    float oldVal = configuredCutoffVoltage;
     configuredCutoffVoltage = targetVoltage;
-    Serial.printf("[CONFIG] Changed variable CUTOFF_VOLTAGE: [%.2f V] -> [%.2f V]\n", oldVal, configuredCutoffVoltage);
   }
 }
 

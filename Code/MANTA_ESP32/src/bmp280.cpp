@@ -13,8 +13,8 @@ static float currentTemperature = 25.0f;
 
 void initBMP280() {
   Wire.begin(PIN_SDA, PIN_SCL, 400000); // Initialize I2C bus at 400kHz
-  Wire.setTimeOut(50); // 50ms I2C timeout to prevent bus lockup
-  delay(50);
+  Wire.setTimeOut(20); // 20ms I2C timeout to prevent bus lockup
+  delay(10);
 
   // Probe I2C addresses 0x76 and 0x77 safely before initializing
   uint8_t targetAddr = 0;
@@ -30,14 +30,15 @@ void initBMP280() {
 
   if (targetAddr != 0 && bmp.begin(targetAddr)) {
     bmpInitialized = true;
-    Serial.print("[BMP280] Barometer initialized successfully on I2C address 0x");
-    Serial.println(targetAddr, HEX);
+    Serial.printf("[BMP280] Initialized on I2C address 0x%02X\n", targetAddr);
   } else {
-    Serial.println("[BMP280] WARNING: BMP280 barometer not detected on I2C bus (0x76/0x77)!");
     bmpInitialized = false;
+    currentAltitude = 0.0f;
+    currentPressure = 1013.25f;
+    currentTemperature = 25.0f;
+    Serial.println("[BMP280 WARNING] Barometer not detected. Continuing with default 0.0m altitude.");
     return;
   }
-
 
   /* Default settings from datasheet for outdoor flight/drone navigation */
   bmp.setSampling(Adafruit_BMP280::MODE_NORMAL,     /* Operating Mode. */
@@ -60,9 +61,6 @@ void initBMP280() {
   }
   if (validSamples > 0) {
     baselinePressure = (sumP / validSamples) / 100.0f; // Convert Pa to hPa
-    Serial.print("[BMP280 Calibration] Ground Baseline Pressure set to ");
-    Serial.print(baselinePressure, 2);
-    Serial.println(" hPa");
   }
 }
 
@@ -71,9 +69,6 @@ void setBaselinePressure() {
   float p = bmp.readPressure();
   if (p > 30000.0f && p < 120000.0f) {
     baselinePressure = p / 100.0f;
-    Serial.print("[BMP280] Baseline pressure reset to ");
-    Serial.print(baselinePressure, 2);
-    Serial.println(" hPa");
   }
 }
 

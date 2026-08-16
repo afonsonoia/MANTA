@@ -7,9 +7,10 @@
 #include <LoRa.h>
 #include <SPI.h>
 
-#define DIAG_LED 2
-
 static uint8_t currentLoRaPower = LORA_TX_POWER;
+static bool loraOnline = false;
+static unsigned long lastLoRaReconnectAttempt = 0;
+static unsigned long lastTxStartTime = 0;
 
 void setLoRaTxPower(uint8_t powerDbm) {
   if (powerDbm < 2)
@@ -17,21 +18,16 @@ void setLoRaTxPower(uint8_t powerDbm) {
   if (powerDbm > 20)
     powerDbm = 20;
   if (currentLoRaPower != powerDbm) {
-    uint8_t oldVal = currentLoRaPower;
     currentLoRaPower = powerDbm;
-    LoRa.setTxPower(currentLoRaPower, PA_OUTPUT_PA_BOOST_PIN);
-    Serial.printf(
-        "[CONFIG] Changed variable LORA_TX_POWER: [%d dBm] -> [%d dBm]\n",
-        oldVal, currentLoRaPower);
+    if (loraOnline) {
+      LoRa.setTxPower(currentLoRaPower, PA_OUTPUT_PA_BOOST_PIN);
+    }
   }
 }
 
 uint8_t getLoRaTxPower() { return currentLoRaPower; }
 
-void initNetwork() {
-  pinMode(DIAG_LED, OUTPUT);
-  digitalWrite(DIAG_LED, LOW);
-
+static bool attemptLoRaStart() {
   pinMode(LORA_CS, OUTPUT);
   digitalWrite(LORA_CS, HIGH);
 
@@ -48,198 +44,80 @@ void initNetwork() {
   LoRa.setSPI(SPI);
   LoRa.setPins(LORA_CS, LORA_RST, LORA_DIO0);
 
-  while (!LoRa.begin(LORA_BAND)) {
-    Serial.println("[LORA] Error: Failed to initialize LoRa radio module! "
-                   "Check SPI wiring!");
-    digitalWrite(DIAG_LED, HIGH);
-    delay(150);
-    digitalWrite(DIAG_LED, LOW);
-    delay(350);
+  if (LoRa.begin(LORA_BAND)) {
+    LoRa.setSignalBandwidth(LORA_BW);
+    LoRa.setSpreadingFactor(LORA_SF);
+    LoRa.setTxPower(currentLoRaPower, PA_OUTPUT_PA_BOOST_PIN);
+    LoRa.setCodingRate4(LORA_CR);
+    LoRa.setSyncWord(LORA_SYNC_WORD);
+    LoRa.enableCrc();
+    loraOnline = true;
+    Serial.println("[LoRa MANTA] Radio initialized (433 MHz, SF7, BW250k, CR4/5, SYNC 0x12) - Non-blocking Simplex TX!");
+    return true;
   }
-
-  LoRa.setTxPower(currentLoRaPower, PA_OUTPUT_PA_BOOST_PIN);
-  LoRa.setSpreadingFactor(LORA_SF);
-  LoRa.setSignalBandwidth(LORA_BW);
-  LoRa.setCodingRate4(LORA_CR);
-  LoRa.setSyncWord(LORA_SYNC_WORD);
-  LoRa.enableCrc();
-  LoRa.receive();
-
-  Serial.printf(
-      "[LORA] Radio initialized successfully! Tx Power: %d dBm (PA_BOOST)\n",
-      currentLoRaPower);
+  loraOnline = false;
+  return false;
 }
 
-static void sendLoRaAck(const String &cmd) {
-  String ackMsg = "ACK:" + cmd;
-  Serial.printf("[MANTA ACK] Transmitting LoRa ACK: %s\n", ackMsg.c_str());
-  if (LoRa.beginPacket()) {
-    LoRa.print(ackMsg);
-    LoRa.endPacket();
-    LoRa.receive();
-  }
-}
-
-static void processCommandString(String req) {
-  req.trim();
-  if (req.length() == 0)
-    return;
-
-  // Security Guard: Ignore remote configuration commands in flight mode (CH5 <=
-  // 1900 & RC Active)
-  uint16_t ch1 = 0, ch2 = 0, ch3 = 0, ch4 = 0, ch5 = 0;
-  getReceiverChannels(ch1, ch2, ch3, ch4, ch5);
-  if (!isRCSignalLost() && ch5 <= 1900) {
-    return; // Block execution: strictly 1-way MANTA -> Ground Station in flight
-            // mode
-  }
-
-  bool executed = false;
-  if (req.startsWith("THROTTLE:")) {
-    int val = req.substring(9).toInt();
-    setThrottlePulse(val);
-    executed = true;
-  } else if (req.startsWith("CUTOFF:")) {
-    float val = req.substring(7).toFloat();
-    setCutoffThreshold(val);
-    executed = true;
-  } else if (req.startsWith("CALIB_TRIM") || req.startsWith("CALIB_NEUTRAL")) {
-    calibrateNeutralCenters();
-    executed = true;
-  } else if (req.startsWith("SET_SERVO_ANGLE:")) {
-    int angle = req.substring(16).toInt();
-    setServoMaxAngle((uint8_t)angle);
-    executed = true;
-  } else if (req.startsWith("SET_SERVO_TRIM:")) {
-    String params = req.substring(15);
-    int comma1 = params.indexOf(',');
-    int comma2 = params.indexOf(',', comma1 + 1);
-    int comma3 = params.indexOf(',', comma2 + 1);
-    if (comma1 > 0 && comma2 > comma1 && comma3 > comma2) {
-      int br = params.substring(0, comma1).toInt();
-      int bl = params.substring(comma1 + 1, comma2).toInt();
-      int fr = params.substring(comma2 + 1, comma3).toInt();
-      int fl = params.substring(comma3 + 1).toInt();
-      setServoTrims((int16_t)br, (int16_t)bl, (int16_t)fr, (int16_t)fl);
-      saveCalibrationToNVS();
-      executed = true;
-    }
-  } else if (req.startsWith("SET_SERVO_INV:")) {
-    String params = req.substring(14);
-    int comma1 = params.indexOf(',');
-    int comma2 = params.indexOf(',', comma1 + 1);
-    int comma3 = params.indexOf(',', comma2 + 1);
-    if (comma1 > 0 && comma2 > comma1 && comma3 > comma2) {
-      bool br = params.substring(0, comma1).toInt() != 0;
-      bool bl = params.substring(comma1 + 1, comma2).toInt() != 0;
-      bool fr = params.substring(comma2 + 1, comma3).toInt() != 0;
-      bool fl = params.substring(comma3 + 1).toInt() != 0;
-      setServoInversion(br, bl, fr, fl);
-      saveCalibrationToNVS();
-      executed = true;
-    }
-  } else if (req.startsWith("SET_DEADBAND:")) {
-    int val = req.substring(13).toInt();
-    setRCMarginDeadband((uint8_t)val);
-    saveCalibrationToNVS();
-    executed = true;
-  } else if (req.startsWith("SET_RC_FILTER:")) {
-    String params = req.substring(14);
-    int sep1 = params.indexOf(':');
-    if (sep1 < 0)
-      sep1 = params.indexOf(',');
-    int sep2 = params.indexOf(':', sep1 + 1);
-    if (sep2 < 0)
-      sep2 = params.indexOf(',', sep1 + 1);
-    if (sep1 > 0) {
-      uint8_t fType = (uint8_t)params.substring(0, sep1).toInt();
-      uint16_t wSize = 5;
-      float alphaVal = 0.33f;
-      if (sep2 > sep1) {
-        wSize = (uint16_t)params.substring(sep1 + 1, sep2).toInt();
-        alphaVal = params.substring(sep2 + 1).toFloat();
-        if (alphaVal > 1.0f)
-          alphaVal /= 100.0f;
-      } else {
-        wSize = (uint16_t)params.substring(sep1 + 1).toInt();
-      }
-      setRCFilterConfig(fType, wSize, alphaVal);
-      executed = true;
-    }
-  } else if (req.startsWith("SET_LORA_POWER:")) {
-    int val = req.substring(15).toInt();
-    setLoRaTxPower((uint8_t)val);
-    executed = true;
-  } else if (req.startsWith("SET_SERVO_INTERVAL:")) {
-    int val = req.substring(19).toInt();
-    setServoUpdateInterval((uint16_t)val);
-    executed = true;
-  } else if (req.startsWith("CALIB_SAVE")) {
-    saveCalibrationToNVS();
-    executed = true;
-  }
-
-  if (executed) {
-    sendLoRaAck(req);
+void initNetwork() {
+  Serial.println("[LoRa MANTA] Initializing LoRa Radio on 433 MHz...");
+  if (!attemptLoRaStart()) {
+    Serial.println("[LoRa MANTA WARNING] LoRa radio not detected on boot! Flight loop will continue. Auto-reconnect active in background.");
   }
 }
 
 void handleNetworkCommands() {
-  // 1. Process incoming commands over USB Serial
-  while (Serial.available()) {
-    String serialReq = Serial.readStringUntil('\n');
-    processCommandString(serialReq);
-  }
-
-  // 2. Process incoming commands over LoRa RF
-  int packetSize = LoRa.parsePacket();
-  if (packetSize) {
-    String req = "";
-    while (LoRa.available()) {
-      req += (char)LoRa.read();
-    }
-    processCommandString(req);
-  }
+  // Simplex Broadcast Mode: No command listening to eliminate RF half-duplex collisions.
 }
 
-void sendTelemetry(float rawADC, float batteryVoltage, float pitch, float roll,
-                   float yaw, float effectiveCutoff, double lat, double lon,
-                   float alt, float temp, int sats, int fix, uint16_t rch1,
-                   uint16_t rch2, uint16_t rch3, uint16_t rch4, uint16_t rch5,
-                   bool rcSignalLost) {
+void sendTelemetry(
+    float pitch, float roll,
+    int16_t accelX, int16_t accelY, int16_t accelZ,
+    int16_t gyroX, int16_t gyroY, int16_t gyroZ,
+    uint16_t rch1, uint16_t rch2, uint16_t rch3, uint16_t rch5,
+    float batteryVoltage, float alt,
+    bool rcSignalLost
+) {
   static uint32_t packetCount = 0;
-  static bool ledState = false;
-  packetCount++;
+  static unsigned long lastSuccessfulTxTime = 0;
 
-  // Toggle LED state (ON <-> OFF) every 2 telemetry packets
-  if (packetCount % 2 == 0) {
-    ledState = !ledState;
-    digitalWrite(DIAG_LED, ledState ? HIGH : LOW);
+  // If LoRa is not online, attempt non-blocking reconnect every 2 seconds
+  if (!loraOnline) {
+    unsigned long now = millis();
+    if (now - lastLoRaReconnectAttempt >= 2000) {
+      lastLoRaReconnectAttempt = now;
+      if (attemptLoRaStart()) {
+        Serial.println("[LoRa MANTA] Background reconnect succeeded!");
+      }
+    }
+    return; // Don't block flight controller while LoRa is offline
   }
 
-  uint8_t activeDeadband = getRCMarginDeadband();
-  uint8_t flags = (rcSignalLost ? 1 : 0) | ((rch5 > 1900) ? 2 : 0);
-
-  Serial.printf(
-      "[LORA TX 4Hz] BAT_V:%.2fV | BAT_ADC:%.1f | Pitch:%.1f | Roll:%.1f | "
-      "Yaw:%.1f | Cutoff:%.2f | DB:%dus | Lat:%.6f | Lon:%.6f | Alt:%.1f | "
-      "Temp:%.1f | Sats:%d | RC:[%u,%u,%u,%u,%u] SIG:%d\n",
-      batteryVoltage, rawADC, pitch, roll, yaw, effectiveCutoff, activeDeadband,
-      lat, lon, alt, temp, sats, rch1, rch2, rch3, rch4, rch5,
-      rcSignalLost ? 0 : 1);
+  uint8_t flags = rcSignalLost ? 1 : 0;
 
   MantaTelemetryPacket pkt;
-  encode_telemetry_packet(&pkt, batteryVoltage, rawADC, pitch, roll, yaw,
-                          effectiveCutoff, activeDeadband, lat, lon, alt, temp,
-                          sats, fix, rch1, rch2, rch3, rch4, rch5, flags);
+  encode_telemetry_packet(&pkt, pitch, roll,
+                          accelX, accelY, accelZ,
+                          gyroX, gyroY, gyroZ,
+                          rch1, rch2, rch3, rch5,
+                          batteryVoltage, alt,
+                          flags);
 
+  // beginPacket() returns 0 if radio is currently busy transmitting
   if (LoRa.beginPacket()) {
     LoRa.write((const uint8_t *)&pkt, sizeof(MantaTelemetryPacket));
+    LoRa.endPacket(true); // Asynchronous / Non-blocking TX (never hangs the MCU)
+    lastSuccessfulTxTime = millis();
+    packetCount++;
 
-    // Synchronous transmission to ensure packet finishes sending over the air
-    // (~55ms)
-    LoRa.endPacket();
-
-    LoRa.receive(); // Re-enable receive mode
+    Serial.printf("[LoRa MANTA TX #%u] Batt: %.2fV | Pitch: %.1f | Roll: %.1f | Alt: %.1fm\n",
+                  packetCount, batteryVoltage, pitch, roll, alt);
+  } else {
+    // If radio remains busy for > 200ms (stalled transmission), auto-recover
+    if (lastSuccessfulTxTime > 0 && millis() - lastSuccessfulTxTime > 200) {
+      Serial.println("[LoRa WARNING] TX radio stalled (>200ms)! Reinitializing LoRa.");
+      attemptLoRaStart();
+      lastSuccessfulTxTime = millis();
+    }
   }
 }

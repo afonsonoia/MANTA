@@ -23,16 +23,13 @@ static uint16_t emaState[5] = {1500, 1500, 1000, 1500, 1500};
 void setRCFilterConfig(uint8_t filterType, uint16_t windowSize, float alpha) {
   if (filterType > 3) filterType = 1;
   if (windowSize < 1) windowSize = 1;
-  if (windowSize > MAX_FILTER_WINDOW) windowSize = MAX_FILTER_WINDOW;
+  if (windowSize > 20) windowSize = 20;
   if (alpha < 0.01f) alpha = 0.01f;
   if (alpha > 1.00f) alpha = 1.00f;
 
   rcFilterType = filterType;
   rcFilterWindow = windowSize;
   rcFilterAlpha = alpha;
-
-  const char* typeStr = (filterType == 0) ? "NONE/RAW" : (filterType == 1) ? "SMA" : (filterType == 2) ? "EMA" : "WMA";
-  Serial.printf("[CONFIG] Changed RC Filter: Type [%s (%d)], Window [%d], Alpha [%.2f]\n", typeStr, filterType, windowSize, alpha);
 }
 
 void getRCFilterConfig(uint8_t &filterType, uint16_t &windowSize, float &alpha) {
@@ -45,9 +42,7 @@ void setRCMarginDeadband(uint8_t deadbandUs) {
   if (deadbandUs < 1) deadbandUs = 1;
   if (deadbandUs > 50) deadbandUs = 50;
   if (rcMarginDeadband != deadbandUs) {
-    uint8_t oldVal = rcMarginDeadband;
     rcMarginDeadband = deadbandUs;
-    Serial.printf("[CONFIG] Changed variable RC_MARGIN_DEADBAND: [%d us] -> [%d us]\n", oldVal, rcMarginDeadband);
   }
 }
 
@@ -266,8 +261,43 @@ void initReceiver() {
   attachInterrupt(digitalPinToInterrupt(PIN_RC_CH3), isrCH3, CHANGE);
   attachInterrupt(digitalPinToInterrupt(PIN_RC_CH4), isrCH4, CHANGE);
   attachInterrupt(digitalPinToInterrupt(PIN_RC_CH5), isrCH5, CHANGE);
+}
 
-  Serial.println("[RECEIVER] RC 5-Channel Filtered Reader (Core 0) initialized!");
+void getReceiverChannels(uint16_t &ch1, uint16_t &ch2, uint16_t &ch3) {
+  noInterrupts();
+  uint16_t v1 = savedChannelVector[0];
+  uint16_t v2 = savedChannelVector[1];
+  uint16_t v3 = savedChannelVector[2];
+  interrupts();
+
+  if (isRCSignalLost()) {
+    ch1 = 0; ch2 = 0; ch3 = 0;
+    return;
+  }
+
+  ch1 = (v1 > 0) ? constrain(v1, 1000, 2000) : 0;
+  ch2 = (v2 > 0) ? constrain(v2, 1000, 2000) : 0;
+  ch3 = (v3 > 0) ? constrain(v3, 1000, 2000) : 0;
+}
+
+void getReceiverChannels(uint16_t &ch1, uint16_t &ch2, uint16_t &ch3, uint16_t &ch5) {
+  noInterrupts();
+  uint16_t v1 = savedChannelVector[0];
+  uint16_t v2 = savedChannelVector[1];
+  uint16_t v3 = savedChannelVector[2];
+  uint16_t v5 = savedChannelVector[4];
+  interrupts();
+
+  if (isRCSignalLost()) {
+    ch1 = 0; ch2 = 0; ch3 = 0; ch5 = 0;
+    return;
+  }
+
+  ch1 = (v1 > 0) ? constrain(v1, 1000, 2000) : 0;
+  ch2 = (v2 > 0) ? constrain(v2, 1000, 2000) : 0;
+  ch3 = (v3 > 0) ? constrain(v3, 1000, 2000) : 0;
+  // CH5 is a 2-position switch: >1500 -> 2000us, otherwise 1000us
+  ch5 = (v5 > 0) ? ((v5 > 1500) ? 2000 : 1000) : 0;
 }
 
 void getReceiverChannels(uint16_t &ch1, uint16_t &ch2, uint16_t &ch3, uint16_t &ch4, uint16_t &ch5) {
@@ -290,5 +320,6 @@ void getReceiverChannels(uint16_t &ch1, uint16_t &ch2, uint16_t &ch3, uint16_t &
   ch2 = (v2 > 0) ? constrain(v2, 1000, 2000) : 0;
   ch3 = (v3 > 0) ? constrain(v3, 1000, 2000) : 0;
   ch4 = (v4 > 0) ? constrain(v4, 1000, 2000) : 0;
-  ch5 = (v5 > 0) ? constrain(v5, 1000, 2000) : 0;
+  // CH5 is a 2-position switch: >1500 -> 2000us, otherwise 1000us
+  ch5 = (v5 > 0) ? ((v5 > 1500) ? 2000 : 1000) : 0;
 }

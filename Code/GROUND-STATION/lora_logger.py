@@ -23,7 +23,7 @@ except ImportError:
     HAS_MATPLOTLIB = False
 
 DEFAULT_BAUD = 115200
-EXCEL_FILE = 'registo_bateria_lora.xlsx'
+EXCEL_FILE = 'lora_battery_log.xlsx'
 DEFAULT_ALERT_VOLTAGE = 12.50
 
 def calculate_battery_voltage(raw_adc):
@@ -61,7 +61,7 @@ class BatteryAnalyzerGUI:
 
         # Last Known Calibration State for Change Logging
         self.last_angle = 30
-        self.last_deadband = 25
+        self.last_deadband = 18
         self.last_trims = [0, 0, 0, 0]
         self.last_inv = [0, 0, 0, 0]
         self.last_alert_voltage = 12.50
@@ -213,7 +213,7 @@ class BatteryAnalyzerGUI:
         calib_card.pack(fill=tk.X, padx=20, pady=5)
 
         calib_title = tk.Label(
-            calib_card, text="Servo Calibration & Range Setup (CH5 > 1900 -> Throttle Locked 1000us)",
+            calib_card, text="Servo Control & Range Setup",
             font=("Segoe UI", 10, "bold"), bg=self.CARD_BG, fg=self.ACCENT_YELLOW
         )
         calib_title.grid(row=0, column=0, columnspan=8, sticky="w", pady=(0, 6))
@@ -226,7 +226,7 @@ class BatteryAnalyzerGUI:
 
         tk.Label(calib_card, text="RC Deadband (us):", bg=self.CARD_BG, fg=self.TEXT_COLOR).grid(row=1, column=2, sticky="w", padx=(8, 2))
         self.spin_deadband = tk.Spinbox(calib_card, from_=1, to=50, width=4, bg=self.LOG_BG, fg=self.TEXT_COLOR, insertbackground=self.TEXT_COLOR)
-        self.spin_deadband.delete(0, tk.END); self.spin_deadband.insert(0, "25")
+        self.spin_deadband.delete(0, tk.END); self.spin_deadband.insert(0, "18")
         self.spin_deadband.grid(row=1, column=3, sticky="w", padx=2)
 
         # Fine Trims per servo (us)
@@ -397,6 +397,9 @@ class BatteryAnalyzerGUI:
             default_port = port_list[0]
             for p in port_list:
                 if "COM4" in p:
+                    default_port = p
+                    break
+                elif "COM6" in p:
                     default_port = p
                     break
             self.port_combo.set(default_port)
@@ -699,7 +702,7 @@ class BatteryAnalyzerGUI:
                     data = self.serial_conn.read(in_w)
                     if data:
                         raw_bytes_buffer.extend(data)
-                        while len(raw_bytes_buffer) >= 42:
+                        while len(raw_bytes_buffer) >= PACKET_SIZE:
                             idx = raw_bytes_buffer.find(b'MT')
                             if idx == -1:
                                 if len(raw_bytes_buffer) > 1:
@@ -707,18 +710,17 @@ class BatteryAnalyzerGUI:
                                 break
                             if idx > 0:
                                 raw_bytes_buffer = raw_bytes_buffer[idx:]
-                            if len(raw_bytes_buffer) < 42:
+                            if len(raw_bytes_buffer) < PACKET_SIZE:
                                 break
 
-                            pkt_bin = bytes(raw_bytes_buffer[:42])
+                            pkt_bin = bytes(raw_bytes_buffer[:PACKET_SIZE])
                             decoded_pkt = decode_telemetry(pkt_bin)
                             if decoded_pkt is not None:
-                                self.last_manta_confirmed_deadband = decoded_pkt["deadband"]
-                                self.last_manta_ch5 = decoded_pkt["rc"][4]
+                                self.last_manta_confirmed_deadband = decoded_pkt.get("deadband", 25)
                                 rec_v = decoded_pkt.get("batteryVoltage", 0.0)
                                 raw_adc = decoded_pkt.get("rawADC", 0.0)
                                 self._process_voltage_sample(rec_v, raw_adc)
-                                raw_bytes_buffer = raw_bytes_buffer[42:]
+                                raw_bytes_buffer = raw_bytes_buffer[PACKET_SIZE:]
                             else:
                                 raw_bytes_buffer = raw_bytes_buffer[1:]
 

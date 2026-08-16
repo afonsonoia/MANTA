@@ -14,12 +14,12 @@ def main():
     print("=" * 60)
     
     if mode == "tcp":
-        print("Servidor TCP ativo na porta 14550...")
-        print("No Mission Planner: Seleciona 'TCP' -> Host: 127.0.0.1 -> Port: 14550 -> Clica em Connect.")
+        print("TCP server active on port 14550...")
+        print("In Mission Planner: Select 'TCP' -> Host: 127.0.0.1 -> Port: 14550 -> Click Connect.")
         conn_str = 'tcpin:0.0.0.0:14550'
     else:
-        print("A transmitir UDP para 127.0.0.1:14550...")
-        print("No Mission Planner: Seleciona 'UDP' -> Port: 14550 -> Clica em Connect.")
+        print("Streaming UDP to 127.0.0.1:14550...")
+        print("In Mission Planner: Select 'UDP' -> Port: 14550 -> Click Connect.")
         conn_str = 'udpout:127.0.0.1:14550'
 
 

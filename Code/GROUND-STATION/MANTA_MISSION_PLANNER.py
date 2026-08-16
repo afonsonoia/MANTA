@@ -16,7 +16,7 @@ try:
 except ImportError:
     HAS_PYMAVLINK = False
 
-from telemetry_codec import decode_telemetry, encode_telemetry
+from telemetry_codec import decode_telemetry, encode_telemetry, PACKET_SIZE
 
 # Config
 DEFAULT_BAUD = 115200
@@ -41,6 +41,9 @@ latest_estimated_voltage = 12.50
 latest_pitch = 0.0
 latest_roll = 0.0
 latest_yaw = 0.0
+latest_gx = 0
+latest_gy = 0
+latest_gz = 0
 latest_lat = 0.0
 latest_lon = 0.0
 latest_alt = 0.0
@@ -106,9 +109,61 @@ def ensure_mission_planner_autoconnect():
     except Exception as e:
         print(f"[Mission Planner Config Warning] Could not update config.xml: {e}")
 
+mission_planner_proc = None
+gui_root = None
+active_wb = None
+
+def kill_mission_planner():
+    """Terminates Mission Planner process cleanly and kills any running instances."""
+    global mission_planner_proc
+    if mission_planner_proc is not None:
+        try:
+            mission_planner_proc.terminate()
+        except Exception:
+            pass
+    try:
+        subprocess.run(["taskkill", "/f", "/im", "MissionPlanner.exe"],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception:
+        pass
+
+def global_shutdown(signum=None, frame=None):
+    """Cleanly terminates Ground Station, saves Excel, closes Mission Planner, and exits immediately."""
+    global gui_root, active_serial_conn, active_wb
+    print("\n[MANTA Ground Station] A encerrar todos os processos (GUI + Mission Planner + MAVLink)...")
+    
+    try:
+        send_alarm_command(False, force=True)
+    except Exception:
+        pass
+        
+    if active_serial_conn and active_serial_conn.is_open:
+        try:
+            active_serial_conn.close()
+        except Exception:
+            pass
+
+    if active_wb is not None:
+        try:
+            active_wb.save(EXCEL_FILE)
+            print(f"[MANTA Ground Station] Registo final guardado em {EXCEL_FILE}")
+        except Exception:
+            pass
+
+    kill_mission_planner()
+
+    if gui_root is not None:
+        try:
+            gui_root.destroy()
+        except Exception:
+            pass
+
+    print("[MANTA Ground Station] Todos os processos terminados com sucesso.")
+    os._exit(0)
 
 def launch_mission_planner():
     """Ensures auto-connect settings and launches Mission Planner."""
+    global mission_planner_proc
     ensure_mission_planner_autoconnect()
     mp_paths = [
         r'C:\Program Files (x86)\Mission Planner\MissionPlanner.exe',
@@ -119,7 +174,7 @@ def launch_mission_planner():
     for p in mp_paths:
         if os.path.exists(p):
             try:
-                subprocess.Popen([p], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                mission_planner_proc = subprocess.Popen([p], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 print(f"[Mission Planner] Mission Planner aberto automaticamente a partir de: '{p}'")
                 return True
             except Exception as e:
@@ -196,18 +251,8 @@ def load_calibration():
             print(f"[IMU Calibration Error] Failed to load calibration file: {e}")
 
 def get_calibrated_angles(raw_p, raw_r):
-    """Computes zero-calibrated pitch and roll, automatically handling upright and upside-down sensor mountings."""
-    if abs(raw_p) < 0.001 and abs(raw_r) < 0.001:
-        return 0.0, 0.0
-    if abs(roll_offset) > 90.0:
-        diff_p = raw_p - pitch_offset
-        diff_r = (raw_r - roll_offset + 180.0) % 360.0 - 180.0
-        c_pitch = diff_p
-        c_roll  = diff_r
-    else:
-        c_pitch = -((raw_p - pitch_offset + 180.0) % 360.0 - 180.0)
-        c_roll  = -((raw_r - roll_offset  + 180.0) % 360.0 - 180.0)
-    return c_pitch, c_roll
+    """Direct passthrough of MANTA IMU orientation (all formulas applied at source in firmware)."""
+    return raw_p, raw_r
 
 pending_config_commands = []
 
@@ -382,14 +427,24 @@ def send_trim_calibration_command():
         print("[LoRa TX Warning] Cannot send calibration command: Serial connection not open!")
     return False
 
-def auto_find_com_port():
-    """Detects available COM ports and selects the ESP32 port."""
+def auto_find_com_port(preferred_port=None):
+    """Detects available COM ports and selects the Ground Station ESP32 port."""
+    if preferred_port:
+        return preferred_port
     ports = list(serial.tools.list_ports.comports())
     if not ports:
         return None
+    # Prioritize Ground Station port (COM4 or COM6)
     for p in ports:
         if "COM4" in p.device:
             return "COM4"
+    for p in ports:
+        if "COM6" in p.device:
+            return "COM6"
+    # If COM4/COM6 not found, pick any port other than MANTA flight controller (COM5)
+    for p in ports:
+        if "COM5" not in p.device:
+            return p.device
     return ports[0].device
 
 def main():
@@ -428,7 +483,7 @@ def main():
         
         send_alarm_command(False, force=True)
         send_cutoff_command(alert_voltage_threshold, force=True)
-        send_deadband_command(25, force=True)
+        send_deadband_command(18, force=True)
     except Exception as e:
         print(f"[Error] Could not open {port_name}: {e}")
         return
@@ -448,9 +503,10 @@ def main():
             print(f"[Warning] Could not delete previous log file '{EXCEL_FILE}': {e}")
 
     wb = Workbook()
+    active_wb = wb
     ws = wb.active
     ws.title = "MANTA Mission Telemetry Log"
-    ws.append(["Record Number", "Elapsed Time (s)", "Raw Sensor (ADC)", "Battery Voltage (V)", "Pitch (deg)", "Roll (deg)", "Yaw (deg)", "Latitude", "Longitude", "Altitude (m)", "Satellites", "Fix Type"])
+    ws.append(["Record Number", "Elapsed Time (s)", "Raw Sensor (ADC)", "Battery Voltage (V)", "Pitch (deg)", "Roll (deg)", "Yaw (deg)", "Latitude", "Longitude", "Altitude (m)", "Satellites", "Fix Type", "RSSI", "SNR"])
     record_number = 1
     wb.save(EXCEL_FILE)
     print(f"Created new clean log file '{EXCEL_FILE}'.")
@@ -528,7 +584,7 @@ def main():
                         raw_bytes_buffer.extend(data)
                         binary_telemetry_updated = False
 
-                        while len(raw_bytes_buffer) >= 42:
+                        while len(raw_bytes_buffer) >= 31:
                             idx = raw_bytes_buffer.find(b'MT')
                             if idx == -1:
                                 if len(raw_bytes_buffer) > 1:
@@ -536,37 +592,59 @@ def main():
                                 break
                             if idx > 0:
                                 raw_bytes_buffer = raw_bytes_buffer[idx:]
-                            if len(raw_bytes_buffer) < 42:
+                            if len(raw_bytes_buffer) < 31:
                                 break
 
-                            pkt_bin = bytes(raw_bytes_buffer[:42])
-                            decoded_pkt = decode_telemetry(pkt_bin)
+                            decoded_pkt = None
+                            pkt_len_used = 0
+
+                            # Try 33-byte (4CH), 31-byte (3CH legacy), and 35-byte (5CH)
+                            for p_size in [33, 31, 35]:
+                                if len(raw_bytes_buffer) >= p_size:
+                                    candidate = bytes(raw_bytes_buffer[:p_size])
+                                    res = decode_telemetry(candidate)
+                                    if res is not None:
+                                        decoded_pkt = res
+                                        pkt_len_used = p_size
+                                        break
+
                             if decoded_pkt is not None:
-                                latest_estimated_voltage = decoded_pkt["batteryVoltage"]
-                                latest_pitch = decoded_pkt["pitch"]
-                                latest_roll = decoded_pkt["roll"]
-                                latest_yaw = decoded_pkt["yaw"]
-                                last_manta_confirmed_cutoff = decoded_pkt["effectiveCutoff"]
-                                last_manta_confirmed_deadband = decoded_pkt["deadband"]
-                                latest_lat = decoded_pkt["lat"]
-                                latest_lon = decoded_pkt["lon"]
-                                latest_alt = decoded_pkt["alt"]
-                                latest_temp = decoded_pkt["temp"]
-                                latest_satellites = decoded_pkt["sats"]
-                                latest_fix_type = decoded_pkt["fix"]
-                                latest_rc = decoded_pkt["rc"]
-                                rc_signal_lost = decoded_pkt["rcSignalLost"]
+                                latest_estimated_voltage = decoded_pkt.get("batteryVoltage", 0.0)
+                                latest_pitch = decoded_pkt.get("pitch", 0.0)
+                                latest_roll = decoded_pkt.get("roll", 0.0)
+                                latest_yaw = decoded_pkt.get("yaw", 0.0)
+                                latest_gx = decoded_pkt.get("gyro_x", 0)
+                                latest_gy = decoded_pkt.get("gyro_y", 0)
+                                latest_gz = decoded_pkt.get("gyro_z", 0)
+                                last_manta_confirmed_cutoff = decoded_pkt.get("effectiveCutoff", alert_voltage_threshold)
+                                last_manta_confirmed_deadband = decoded_pkt.get("deadband", 25)
+                                latest_lat = decoded_pkt.get("lat", 0.0)
+                                latest_lon = decoded_pkt.get("lon", 0.0)
+                                latest_alt = decoded_pkt.get("alt", 0.0)
+                                latest_temp = decoded_pkt.get("temp", 0.0)
+                                latest_satellites = decoded_pkt.get("sats", 0)
+                                rc_raw = decoded_pkt.get("rc", [1500, 1500, 1000, 1000])
+                                if len(rc_raw) >= 4:
+                                    latest_rc = [rc_raw[0], rc_raw[1], rc_raw[2], 1500, rc_raw[3]]
+                                elif len(rc_raw) >= 3:
+                                    latest_rc = [rc_raw[0], rc_raw[1], rc_raw[2], 1500, 1000]
+                                else:
+                                    latest_rc = [1500, 1500, 1000, 1500, 1000]
+                                rc_signal_lost = decoded_pkt.get("rcSignalLost", False)
                                 is_manta_calib_mode = decoded_pkt.get("isCalibMode", False)
                                 binary_telemetry_updated = True
                                 check_and_flush_pending_commands()
                                 if gui_app is not None:
                                     try:
-                                        gui_app._process_voltage_sample(decoded_pkt["batteryVoltage"], decoded_pkt["rawADC"])
+                                        gui_app._process_voltage_sample(latest_estimated_voltage, decoded_pkt.get("rawADC", 0.0))
                                     except Exception:
                                         pass
-                                raw_bytes_buffer = raw_bytes_buffer[42:]
+                                raw_bytes_buffer = raw_bytes_buffer[pkt_len_used:]
                             else:
-                                raw_bytes_buffer = raw_bytes_buffer[1:]
+                                if len(raw_bytes_buffer) >= 35:
+                                    raw_bytes_buffer = raw_bytes_buffer[1:]
+                                else:
+                                    break
 
                         buffer += data.decode('utf-8', errors='ignore')
                         while '\n' in buffer:
@@ -618,6 +696,7 @@ def main():
 
                                 raw_adc = None
                                 received_voltage = None
+                                telemetry_updated = False
 
                                 if "BAT_V:" in line_str:
                                     try:
@@ -631,25 +710,23 @@ def main():
                                     except Exception:
                                         pass
 
-                                telemetry_updated = binary_telemetry_updated
-
-                                # If binary telemetry was not present, fall back to ASCII regex parsing
+                                # If binary telemetry was not present, fall back to ASCII regex parsing with strict word boundaries
                                 if not binary_telemetry_updated:
-                                    p_match = re.search(r'(?:Pitch|P):\s*([\d\.-]+)', line_str)
+                                    p_match = re.search(r'\bPitch:\s*([\d\.-]+)', line_str, re.IGNORECASE)
                                     if p_match:
                                         try:
                                             latest_pitch = float(p_match.group(1))
                                             telemetry_updated = True
                                         except Exception:
                                             pass
-                                    r_match = re.search(r'(?:Roll|R):\s*([\d\.-]+)', line_str)
+                                    r_match = re.search(r'\bRoll:\s*([\d\.-]+)', line_str, re.IGNORECASE)
                                     if r_match:
                                         try:
                                             latest_roll = float(r_match.group(1))
                                             telemetry_updated = True
                                         except Exception:
                                             pass
-                                    y_match = re.search(r'(?:Yaw|Y):\s*([\d\.-]+)', line_str)
+                                    y_match = re.search(r'\bYaw:\s*([\d\.-]+)', line_str, re.IGNORECASE)
                                     if y_match:
                                         try:
                                             latest_yaw = float(y_match.group(1))
@@ -657,42 +734,42 @@ def main():
                                         except Exception:
                                             pass
 
-                                    lat_match = re.search(r'LAT:\s*([\d\.-]+)', line_str)
+                                    lat_match = re.search(r'\bLAT:\s*([\d\.-]+)', line_str)
                                     if lat_match:
                                         try:
                                             latest_lat = float(lat_match.group(1))
                                             telemetry_updated = True
                                         except Exception:
                                             pass
-                                    lon_match = re.search(r'LON:\s*([\d\.-]+)', line_str)
+                                    lon_match = re.search(r'\bLON:\s*([\d\.-]+)', line_str)
                                     if lon_match:
                                         try:
                                             latest_lon = float(lon_match.group(1))
                                             telemetry_updated = True
                                         except Exception:
                                             pass
-                                    alt_match = re.search(r'ALT:\s*([\d\.-]+)', line_str)
+                                    alt_match = re.search(r'\bALT:\s*([\d\.-]+)', line_str)
                                     if alt_match:
                                         try:
                                             latest_alt = float(alt_match.group(1))
                                             telemetry_updated = True
                                         except Exception:
                                             pass
-                                    temp_match = re.search(r'TEMP:\s*([\d\.-]+)', line_str)
+                                    temp_match = re.search(r'\bTEMP:\s*([\d\.-]+)', line_str)
                                     if temp_match:
                                         try:
                                             latest_temp = float(temp_match.group(1))
                                             telemetry_updated = True
                                         except Exception:
                                             pass
-                                    sat_match = re.search(r'SAT:\s*(\d+)', line_str)
+                                    sat_match = re.search(r'\bSAT:\s*(\d+)', line_str)
                                     if sat_match:
                                         try:
                                             latest_satellites = int(sat_match.group(1))
                                             telemetry_updated = True
                                         except Exception:
                                             pass
-                                    fix_match = re.search(r'FIX:\s*(\d+)', line_str)
+                                    fix_match = re.search(r'\bFIX:\s*(\d+)', line_str)
                                     if fix_match:
                                         try:
                                             latest_fix_type = int(fix_match.group(1))
@@ -700,7 +777,7 @@ def main():
                                         except Exception:
                                             pass
 
-                                    rc_match = re.search(r'RC:\s*([\d]+),([\d]+),([\d]+),([\d]+),([\d]+)', line_str)
+                                    rc_match = re.search(r'\bRC:\s*(\d+),(\d+),(\d+),(\d+),(\d+)', line_str)
                                     if rc_match:
                                         try:
                                             latest_rc = [int(rc_match.group(i)) for i in range(1, 6)]
@@ -708,7 +785,7 @@ def main():
                                         except Exception:
                                             pass
 
-                                    sig_match = re.search(r'SIG:\s*(\d+)', line_str)
+                                    sig_match = re.search(r'\bSIG:\s*(\d+)', line_str)
                                     if sig_match:
                                         try:
                                             rc_signal_lost = (int(sig_match.group(1)) == 0)
@@ -734,12 +811,13 @@ def main():
                                             print(f"[HOME POSITION SET] Mission Planner HOME set: Lat={latest_lat:.6f}, Lon={latest_lon:.6f}, Alt={latest_alt:.1f}m")
 
 
-                                if raw_adc is not None or received_voltage is not None or telemetry_updated:
+                                if binary_telemetry_updated or telemetry_updated or (received_voltage is not None and received_voltage > 0):
+                                    binary_telemetry_updated = False
                                     now = time.time()
 
                                     if start_time is None:
                                         start_time = now
-                                        last_excel_log_time = now - 10.0
+                                        last_excel_log_time = now - 1.0
                                     elapsed_sec = round(now - start_time, 2)
                                     
                                     if raw_adc is None:
@@ -763,14 +841,13 @@ def main():
                                     # Continuous live telemetry print to terminal (every ~1s)
                                     if (now - last_terminal_print_time) >= 1.0:
                                         last_terminal_print_time = now
-                                        cal_p, cal_r = get_calibrated_angles(latest_pitch, latest_roll)
                                         gps_info = f"Lock [{latest_lat:.6f}, {latest_lon:.6f}]" if has_gps_lock else f"No Lock ({latest_satellites} sats)"
                                         rc = latest_rc
                                         sig_str = "[!! RC SIGNAL LOST !!]" if rc_signal_lost else "[RC OK]"
                                         manta_cut_str = f" | Cutoff: {last_manta_confirmed_cutoff:.2f}V" if last_manta_confirmed_cutoff is not None else ""
                                         manta_db_str = f" | DB: {last_manta_confirmed_deadband}us" if last_manta_confirmed_deadband is not None else ""
-                                        print(f"[MANTA RX {elapsed_sec:.1f}s] Batt: {latest_estimated_voltage:.2f}V | Alt: {latest_alt:.2f}m | Pitch: {cal_p:.1f}° | Roll: {cal_r:.1f}° | GPS: {gps_info}{manta_db_str} {sig_str}")
-                                        print(f"  RC RAW => CH1(Roll):{rc[0]:4d}us  CH2(Pitch):{rc[1]:4d}us  CH3(Throttle):{rc[2]:4d}us  CH4:{rc[3]:4d}us  CH5:{rc[4]:4d}us")
+                                        print(f"[MANTA RX {elapsed_sec:.1f}s] Batt: {latest_estimated_voltage:.2f}V | Alt: {latest_alt:.2f}m | Pitch: {latest_pitch:.1f}° | Roll: {latest_roll:.1f}° | GPS: {gps_info}{manta_db_str} {sig_str}")
+                                        print(f"  RC RAW => CH1(Roll):{rc[0]:4d}us  CH2(Pitch):{rc[1]:4d}us  CH3(Throttle):{rc[2]:4d}us  CH5(Switch):{rc[4]:4d}us")
 
                                         # Extra alert on signal loss
                                         if rc_signal_lost and (now - last_rc_signal_warn_time) >= 5.0:
@@ -781,17 +858,32 @@ def main():
                                             print("  ╚══════════════════════════════════════════╝")
 
 
+                                    # Record every single packet at 20 Hz rate into Excel
+                                    ws.append([
+                                        record_number,
+                                        elapsed_sec,
+                                        raw_adc,
+                                        latest_estimated_voltage,
+                                        round(latest_pitch, 2),
+                                        round(latest_roll, 2),
+                                        round(latest_yaw, 2),
+                                        latest_lat,
+                                        latest_lon,
+                                        latest_alt,
+                                        latest_satellites,
+                                        latest_fix_type,
+                                        last_rssi if last_rssi is not None else "",
+                                        last_snr if last_snr is not None else ""
+                                    ])
+                                    record_number += 1
+
+                                    # Save Excel workbook to disk every 10.0s to maintain silky smooth 20 Hz serial throughput
                                     if (now - last_excel_log_time) >= 10.0:
                                         last_excel_log_time = now
-                                        cal_p, cal_r = get_calibrated_angles(latest_pitch, latest_roll)
-                                        ws.append([record_number, elapsed_sec, raw_adc, latest_estimated_voltage, round(cal_p, 2), round(cal_r, 2), round(latest_yaw, 2), latest_lat, latest_lon, latest_alt, latest_satellites, latest_fix_type])
                                         try:
                                             wb.save(EXCEL_FILE)
-                                            manta_cut_str = f" | Cutoff: {last_manta_confirmed_cutoff:.2f}V" if last_manta_confirmed_cutoff is not None else ""
-                                            print(f"  └─> [EXCEL SAVED #{record_number}] {elapsed_sec:.2f}s | Saved to {EXCEL_FILE}")
-                                        except Exception as e:
-                                            print(f"[Excel Save Error] {e}")
-                                        record_number += 1
+                                        except Exception:
+                                            pass
 
 
             if mav_conn:
@@ -832,7 +924,6 @@ def main():
                     else:
                         batt_pct = int(max(0, min(100, (latest_estimated_voltage - 10.5) / (12.6 - 10.5) * 100)))
 
-                    cal_p, cal_r = get_calibrated_angles(latest_pitch, latest_roll)
                     try:
                         mav_state = mavutil.mavlink.MAV_STATE_EMERGENCY if rc_signal_lost else mavutil.mavlink.MAV_STATE_ACTIVE
                         mav_conn.mav.heartbeat_send(
@@ -896,12 +987,19 @@ def main():
                                 0.0, 0.0, 0.0
                             )
 
+                        # Dynamic angular rates (in rad/s) for zero-latency Mission Planner HUD tracking
+                        rollspeed = (-latest_gy / 32.8) * (math.pi / 180.0)
+                        pitchspeed = (-latest_gx / 32.8) * (math.pi / 180.0)
+                        yawspeed = (latest_gz / 32.8) * (math.pi / 180.0)
+
                         mav_conn.mav.attitude_send(
                             int(now_mav * 1000) & 0xFFFFFFFF,
-                            math.radians(cal_r),
-                            -math.radians(cal_p),
+                            math.radians(latest_roll),
+                            math.radians(latest_pitch),
                             math.radians(latest_yaw),
-                            0.0, 0.0, 0.0
+                            rollspeed,
+                            pitchspeed,
+                            yawspeed
                         )
 
 
@@ -958,41 +1056,22 @@ def main():
             time.sleep(0.005)
 
         except KeyboardInterrupt:
-            print("\n[Mission Planner Bridge] Terminated by user.")
-            break
+            global_shutdown()
         except Exception:
             time.sleep(0.01)
 
-    send_alarm_command(False, force=True)
-    if ser and ser.is_open:
-        try:
-            ser.close()
-        except Exception:
-            pass
-    if 'wb' in locals():
-        wb.save(EXCEL_FILE)
-    
-    print("MANTA Mission Planner Bridge terminated successfully.")
+    global_shutdown()
 
 if __name__ == "__main__":
-    import threading
-    import tkinter as tk
-    from lora_logger import BatteryAnalyzerGUI
+    import signal
 
-    print("[MANTA Ground Station] Starting Mission Planner MAVLink Bridge in background thread...")
-    mav_thread = threading.Thread(target=main, daemon=True)
-    mav_thread.start()
+    signal.signal(signal.SIGINT, global_shutdown)
+    try:
+        signal.signal(signal.SIGTERM, global_shutdown)
+    except Exception:
+        pass
 
-    # Wait briefly for the serial connection to be established in main()
-    import time
-    for _ in range(30):  # Wait up to 3 seconds
-        if active_serial_conn is not None and active_serial_conn.is_open:
-            break
-        time.sleep(0.1)
-
-    print("[MANTA Ground Station] Launching Graphical Ground Station GUI...")
-    root = tk.Tk()
-    # Pass the shared serial connection so the GUI doesn't try to open COM4 again
-    app = BatteryAnalyzerGUI(root, shared_serial=active_serial_conn)
-    gui_app = app
-    root.mainloop()
+    try:
+        main()
+    except KeyboardInterrupt:
+        global_shutdown()

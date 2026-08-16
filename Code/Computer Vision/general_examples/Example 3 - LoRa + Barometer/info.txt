@@ -1,6 +1,6 @@
-Valor de RSSI,Qualidade do Sinal,O que esperar
--30 dBm a -50 dBm,Excelente,Os dispositivos estão na mesma sala ou muito próximos.
--50 dBm a -80 dBm,Muito Bom,"Ligação estável, ideal para ambientes internos com algumas paredes."
--80 dBm a -100 dBm,Bom / Médio,Sinal típico de média distância (alguns blocos de distância).
--100 dBm a -120 dBm,Fraco,Começas a estar no limite. A taxa de erro pode aumentar.
--120 dBm a -140 dBm,Limite Crítico,"Aqui é onde o LoRa brilha. Outras tecnologias já teriam caído, mas o LoRa ainda consegue ler (especialmente se o SF for alto)."
+RSSI Value,Signal Quality,What to Expect
+-30 dBm to -50 dBm,Excellent,Devices are in the same room or very close.
+-50 dBm to -80 dBm,Very Good,"Stable connection, ideal for indoor environments with walls."
+-80 dBm to -100 dBm,Good / Medium,Typical medium-range signal (a few blocks away).
+-100 dBm to -120 dBm,Weak,Approaching limit. Packet error rate may increase.
+-120 dBm to -140 dBm,Critical Limit,"Where LoRa excels. Other wireless technologies would drop, but LoRa still receives (especially with higher SF)."
