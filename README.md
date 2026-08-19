@@ -58,14 +58,14 @@ The project is structured as follows:
 
 ## Current Project Status
 
-*   **Low-Level Firmware**: ESP32 test sketch successfully integrates PWM receiver input reading, deadband smoothing, battery percentage estimation, and servo/ESC command output.
-*   **Voltage Sensor Calibration**: Experimentally determined the conversion function for raw ADC voltage sensor data in the ESP32 firmware, enabling accurate battery voltage measurements.
-*   **Initial LoRa Communication**: Established initial bidirectional LoRa communication between the aircraft (MANTA ESP32) and the ground station, streaming live battery telemetry and RSSI/SNR signal metrics while receiving ESC control commands.
-*   **Visual Navigation**: Python POCs demonstrate lightweight deep feature extraction combined with visual place recognition to predict coordinates based on matching signatures.
-*   **Electronics & Airframe Mounting**: Custom PCBs and core avionics (ESP32 flight controller, LoRa module, sensors, ESC, servos) are fully mounted on the aircraft. (Raspberry Pi and camera module mounting is deferred until flight control logic is solid and visual localization is needed).
-*   **Flight Testing**: Maiden manual flight tests successfully conducted to validate airframe aerodynamics, motor performance, control surface responsiveness, and live ground station telemetry.
-*   **Simulation**: Basic PyQt-based simulation setup created for autopilot PID tuning loops.
-*   **Next Steps**: Conduct additional flight tests to build pilot confidence, resolve remaining sensor bugs, and implement fly-by-wire stabilization loops (PIDs) for a solid, wind-resistant aircraft.
+*   **Low-Level Flight Controller Firmware**: ESP32 firmware running high-rate 100 Hz MPU6050 Mahony AHRS quaternion attitude estimation, uniform sensor sampling, RC receiver decoding (CH1–CH5), deadband filtering, calibrated battery voltage monitoring, and V-tail servo/ESC mixer outputs.
+*   **IMU-Assisted Roll Envelope Protection**: Active fly-by-wire roll limitation and auto-recovery assistance running in real time on RC Channel 5.
+*   **Robust LoRa Telemetry Link**: 20 Hz binary telemetry stream (SF8, BW 250kHz, CRC16) streaming attitude (pitch, roll, yaw), raw IMU, RC channels, battery voltage, barometric altitude, and RSSI/SNR metrics directly to the Ground Station ESP32 and Mission Planner bridge with automated sequential flight logging (`flight_logs/`).
+*   **Voltage Sensor Calibration**: Rigorously calibrated conversion function validated against multimeter ground truth (< 0.062V error) backed by automated CI/CD accuracy tests.
+*   **Airframe & Avionics Integration**: Custom KiCad manufactured power and data distribution PCB shields and core avionics are fully installed on the airframe.
+*   **Flight Testing**: Maiden flights and field testing successfully conducted to validate airframe aerodynamics, motor thrust, control surface behavior, and live HUD attitude tracking in Mission Planner.
+*   **CI/CD Pipeline**: 41 automated tests continuously validating firmware compilation (PlatformIO), telemetry codec integrity, and analytical sensor accuracy.
+*   **Next Steps**: Further flight test tuning of closed-loop PID attitude stabilization (Pitch & Roll leveling) and preparation for autonomous waypoint navigation.
 
 ### Custom Manufactured PCBs
 
@@ -115,24 +115,22 @@ The flight controller integrates an intelligent **attitude-aware roll limitation
 - [x] Perform isolated bench tests for each sensor to ensure accuracy and data reliability.
 
 ### Phase 2: Airframe Assembly & Avionics Integration
-- [x] Finish assembling the main airframe skeleton from the purchased kit.
-- [x] Complete custom KiCad PCB schematic (`MANTA.kicad_sch`).
-- [x] Finalize PCB routing, trace widths for power distribution, and manufacture the board.
-- [x] Assemble the PCB and perform physical continuity and power testing.
-- [x] Experimentally calibrate the raw voltage sensor conversion function to obtain accurate voltage readings from raw ADC data.
-- [x] Experimentally study and map the battery discharge curve under motor load using the calibrated voltage sensor.
+- [x] Assemble the main airframe skeleton and mount propulsion/control surfaces.
+- [x] Complete custom KiCad PCB schematics (`MANTA.kicad_sch`) and layout routing.
+- [x] Manufacture physical dual-board PCB shield architecture (Power & Data boards).
+- [x] Assemble PCBs and validate power distribution, BEC outputs, and sensor bus continuity.
+- [x] Experimentally calibrate raw ADC battery voltage conversion against multimeter ground truth.
 - [x] Mount core avionics and electronics on the airframe (Raspberry Pi & camera deferred for visual localization phase).
-- [x] Conduct EMI (Electromagnetic Interference) testing to ensure motors/ESCs don't disrupt the GPS or LoRa signals.
-- [x] Execute maiden field test in manual flight mode to validate airframe aerodynamics and real-time ground station telemetry streaming.
-- [ ] Conduct extensive field flight tests to build pilot confidence, resolve sensor edge cases, and ensure hardware solidness before advancing to Phase 3.
+- [x] Conduct EMI testing ensuring motor/ESC switching noise does not disrupt GPS or LoRa RF link.
+- [x] Deploy robust LoRa telemetry (SF8, 20 Hz binary codec, non-blocking asynchronous Ground Station logging).
+- [x] Execute maiden field tests in manual flight mode to validate airframe aerodynamics and real-time ground station telemetry streaming.
 
 ### Phase 3: Flight Control & Fly-By-Wire Stabilization
-- [x] Integrate IMU (MPU6050) Mahony AHRS quaternion sensor fusion into low-level ESP32 firmware for high-rate, low-drift attitude estimation.
-- [x] Implement IMU-assisted roll envelope protection and progressive bank angle limiting on RC Channel 5.
-- [ ] Implement and calibrate closed-loop PID controllers for Roll (ailerons/elevons), Pitch (elevator/elevons), and Yaw.
-- [ ] Perform static PID tuning on a test rig to evaluate control surface responsiveness and anti-windup.
+- [x] Integrate 6-axis MPU6050 Mahony AHRS quaternion sensor fusion into low-level ESP32 firmware for high-rate, low-drift attitude estimation.
+- [x] Implement attitude-aware roll envelope protection and progressive bank angle limiting on RC Channel 5.
+- [ ] Implement and calibrate closed-loop PID controllers for Pitch (rear V-tail elevators) and Roll (front rollerons).
 - [ ] Conduct field flight tests to calibrate PIDs for smooth, wind-resistant fly-by-wire leveling and stability.
-- [ ] Execute extensive flight testing under varied weather conditions to thoroughly validate closed-loop stability and control solidness before moving to Phase 4.
+- [ ] Execute extensive flight testing under varied weather conditions to thoroughly validate closed-loop stability before moving to Phase 4.
 
 ### Phase 4: Autonomous Waypoint Navigation & LoRa Path-Planning
 - [ ] Implement interactive trajectory planner in PC Ground Station UI to select waypoints (e.g., 5-point flight path) on a map.
