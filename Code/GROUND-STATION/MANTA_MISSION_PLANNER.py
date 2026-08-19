@@ -22,8 +22,33 @@ from telemetry_codec import decode_telemetry, encode_telemetry, PACKET_SIZE
 
 # Config
 DEFAULT_BAUD = 115200
-EXCEL_FILE = 'registo_manta_telemetry.xlsx'
+LOG_DIR = 'flight_logs'
 CALIB_FILE = 'imu_calibration.json'
+
+def get_next_flight_log_filename(log_dir=LOG_DIR):
+    """Scans flight_logs/ directory and returns the next sequential flight log filename.
+    
+    Example: flight_logs/manta_flight_0001_20260819_150000.xlsx
+    """
+    os.makedirs(log_dir, exist_ok=True)
+    existing_files = os.listdir(log_dir)
+    
+    max_idx = 0
+    pattern = re.compile(r'manta_flight_(\d+)', re.IGNORECASE)
+    for fname in existing_files:
+        match = pattern.search(fname)
+        if match:
+            try:
+                idx = int(match.group(1))
+                if idx > max_idx:
+                    max_idx = idx
+            except ValueError:
+                pass
+
+    next_idx = max_idx + 1
+    timestamp_str = time.strftime("%Y%m%d_%H%M%S")
+    filename = f"manta_flight_{next_idx:04d}_{timestamp_str}.xlsx"
+    return os.path.join(log_dir, filename)
 
 # Global state
 gui_app = None
@@ -121,9 +146,13 @@ class AsyncExcelTelemetryLogger:
     Buffers rows in a thread-safe queue and performs periodic disk flushes (every 10s)
     in a dedicated background worker thread, ensuring the main serial communication
     and 20 Hz MAVLink streaming loops are NEVER blocked by openpyxl XML/ZIP overhead.
+    Each flight is automatically stored in a sequentially numbered file inside flight_logs/.
     """
-    def __init__(self, filename=EXCEL_FILE, auto_save_interval=10.0):
-        self.filename = filename
+    def __init__(self, filename=None, auto_save_interval=10.0):
+        if filename is None:
+            self.filename = get_next_flight_log_filename()
+        else:
+            self.filename = filename
         self.auto_save_interval = auto_save_interval
         self.queue = queue.Queue()
         self.is_running = False
@@ -136,12 +165,7 @@ class AsyncExcelTelemetryLogger:
     def start(self):
         if self.is_running:
             return
-        if os.path.exists(self.filename):
-            try:
-                os.remove(self.filename)
-                print(f"Previous log file '{self.filename}' deleted successfully.")
-            except Exception as e:
-                print(f"[Warning] Could not delete previous log file '{self.filename}': {e}")
+        os.makedirs(os.path.dirname(self.filename), exist_ok=True)
 
         self.wb = Workbook()
         self.ws = self.wb.active
@@ -149,7 +173,7 @@ class AsyncExcelTelemetryLogger:
         self.ws.append(["Record Number", "Elapsed Time (s)", "Raw Sensor (ADC)", "Battery Voltage (V)", "Pitch (deg)", "Roll (deg)", "Yaw (deg)", "Latitude", "Longitude", "Altitude (m)", "Satellites", "Fix Type", "RSSI", "SNR"])
         try:
             self.wb.save(self.filename)
-            print(f"Created new clean log file '{self.filename}'.")
+            print(f"[Telemetry Logger] Novo ficheiro de voo iniciado em: '{self.filename}'.")
         except Exception as e:
             print(f"[Warning] Initial save of '{self.filename}' failed: {e}")
 
@@ -571,10 +595,15 @@ def main():
     
     load_calibration()
 
+    global excel_logger
+    excel_logger = AsyncExcelTelemetryLogger()
+    excel_logger.start()
+    record_number = 1
+
     print(f"Audio alarm configured: <= {alert_voltage_threshold:.2f}V (Intermittent 50% 2kHz)")
     print(f"MANTA Safety Threshold: MAX(12.00V, GS Cutoff Voltage)")
-    print(f"Telemetry rate       : 0.2s (5 Hz LoRa Broadcast)")
-    print(f"Excel Log File       : {EXCEL_FILE}")
+    print(f"Telemetry rate       : 0.05s (20 Hz LoRa Broadcast)")
+    print(f"Flight Log File      : {excel_logger.filename}")
     print("==================================================\n")
     
     port_name = auto_find_com_port()
@@ -601,11 +630,6 @@ def main():
     raw_adcs = []
     start_time = None
     last_terminal_print_time = 0.0
-
-    global excel_logger
-    excel_logger = AsyncExcelTelemetryLogger(EXCEL_FILE)
-    excel_logger.start()
-    record_number = 1
 
     send_throttle_command(current_throttle_pulse, force=True)
     buffer = ""
