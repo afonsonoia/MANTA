@@ -52,7 +52,7 @@ static bool attemptLoRaStart() {
     LoRa.setSyncWord(LORA_SYNC_WORD);
     LoRa.enableCrc();
     loraOnline = true;
-    Serial.println("[LoRa MANTA] Radio initialized (433 MHz, SF7, BW250k, CR4/5, SYNC 0x12) - Non-blocking Simplex TX!");
+    Serial.println("[LoRa MANTA] Radio initialized (433 MHz, SF8, BW250k, CR4/5, SYNC 0x12) - Non-blocking Simplex TX!");
     return true;
   }
   loraOnline = false;

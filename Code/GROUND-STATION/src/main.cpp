@@ -45,7 +45,7 @@ void setup() {
     LoRa.enableCrc();
     LoRa.receive();
 
-    Serial.println("[LORA GS] LoRa Radio ready (433MHz, SF7, BW250k, CR4/5, SYNC 0x12)!");
+    Serial.println("[LORA GS] LoRa Radio ready (433MHz, SF8, BW250k, CR4/5, SYNC 0x12)!");
     Serial.println("[LORA GS] Continuous Simplex RX active - listening for MANTA packets...\n");
 }
 
@@ -66,13 +66,12 @@ void loop() {
         int rssi = LoRa.packetRssi();
         float snr = LoRa.packetSnr();
 
-        // Send raw binary payload to PC Serial
+        // Immediately put radio back into continuous RX mode before serial streaming
+        LoRa.receive();
+
+        // Send raw binary payload to PC Serial non-blocking
         Serial.write(packetBuffer, bytesRead);
         Serial.printf(" RSSI:%d SNR:%.1f\n", rssi, snr);
-        Serial.flush();
-
-        // Immediately put radio back into continuous RX mode
-        LoRa.receive();
     } else {
         // Watchdog: If no valid packet received in 1000ms, ensure radio stays actively in RX continuous mode
         unsigned long now = millis();

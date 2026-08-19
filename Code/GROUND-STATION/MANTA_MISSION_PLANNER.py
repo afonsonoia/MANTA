@@ -9,6 +9,8 @@ import re
 import json
 import subprocess
 import socket
+import queue
+import threading
 
 try:
     from pymavlink import mavutil
@@ -111,7 +113,114 @@ def ensure_mission_planner_autoconnect():
 
 mission_planner_proc = None
 gui_root = None
-active_wb = None
+excel_logger = None
+
+class AsyncExcelTelemetryLogger:
+    """High-performance, non-blocking asynchronous Excel telemetry logger.
+    
+    Buffers rows in a thread-safe queue and performs periodic disk flushes (every 10s)
+    in a dedicated background worker thread, ensuring the main serial communication
+    and 20 Hz MAVLink streaming loops are NEVER blocked by openpyxl XML/ZIP overhead.
+    """
+    def __init__(self, filename=EXCEL_FILE, auto_save_interval=10.0):
+        self.filename = filename
+        self.auto_save_interval = auto_save_interval
+        self.queue = queue.Queue()
+        self.is_running = False
+        self.worker_thread = None
+        self.wb = None
+        self.ws = None
+        self.record_count = 0
+        self.last_save_time = 0.0
+
+    def start(self):
+        if self.is_running:
+            return
+        if os.path.exists(self.filename):
+            try:
+                os.remove(self.filename)
+                print(f"Previous log file '{self.filename}' deleted successfully.")
+            except Exception as e:
+                print(f"[Warning] Could not delete previous log file '{self.filename}': {e}")
+
+        self.wb = Workbook()
+        self.ws = self.wb.active
+        self.ws.title = "MANTA Mission Telemetry Log"
+        self.ws.append(["Record Number", "Elapsed Time (s)", "Raw Sensor (ADC)", "Battery Voltage (V)", "Pitch (deg)", "Roll (deg)", "Yaw (deg)", "Latitude", "Longitude", "Altitude (m)", "Satellites", "Fix Type", "RSSI", "SNR"])
+        try:
+            self.wb.save(self.filename)
+            print(f"Created new clean log file '{self.filename}'.")
+        except Exception as e:
+            print(f"[Warning] Initial save of '{self.filename}' failed: {e}")
+
+        self.is_running = True
+        self.last_save_time = time.time()
+        self.worker_thread = threading.Thread(target=self._worker_loop, daemon=True)
+        self.worker_thread.start()
+
+    def log_row(self, row):
+        if self.is_running:
+            try:
+                self.queue.put_nowait(row)
+            except queue.Full:
+                pass
+
+    def _worker_loop(self):
+        while self.is_running:
+            try:
+                row = self.queue.get(timeout=0.2)
+                if row is not None and self.ws is not None:
+                    self.ws.append(row)
+                    self.record_count += 1
+                self.queue.task_done()
+            except queue.Empty:
+                pass
+            except Exception:
+                pass
+
+            # Drain any remaining rows available in queue in batch
+            while not self.queue.empty():
+                try:
+                    row = self.queue.get_nowait()
+                    if row is not None and self.ws is not None:
+                        self.ws.append(row)
+                        self.record_count += 1
+                    self.queue.task_done()
+                except queue.Empty:
+                    break
+                except Exception:
+                    pass
+
+            now = time.time()
+            if (now - self.last_save_time) >= self.auto_save_interval and self.record_count > 0:
+                self.last_save_time = now
+                try:
+                    self.wb.save(self.filename)
+                except Exception:
+                    pass
+
+    def stop(self):
+        if not self.is_running:
+            return
+        self.is_running = False
+        if self.worker_thread and self.worker_thread.is_alive():
+            self.worker_thread.join(timeout=1.0)
+        # Drain remaining items
+        while not self.queue.empty():
+            try:
+                row = self.queue.get_nowait()
+                if row is not None and self.ws is not None:
+                    self.ws.append(row)
+                    self.record_count += 1
+                self.queue.task_done()
+            except Exception:
+                break
+        if self.wb is not None:
+            try:
+                self.wb.save(self.filename)
+                print(f"[MANTA Ground Station] Registo final guardado em {self.filename} ({self.record_count} registos).")
+            except Exception as e:
+                print(f"[Warning] Falha ao guardar {self.filename} no encerramento: {e}")
 
 def kill_mission_planner():
     """Terminates Mission Planner process cleanly and kills any running instances."""
@@ -129,7 +238,7 @@ def kill_mission_planner():
 
 def global_shutdown(signum=None, frame=None):
     """Cleanly terminates Ground Station, saves Excel, closes Mission Planner, and exits immediately."""
-    global gui_root, active_serial_conn, active_wb
+    global gui_root, active_serial_conn, excel_logger
     print("\n[MANTA Ground Station] A encerrar todos os processos (GUI + Mission Planner + MAVLink)...")
     
     try:
@@ -143,10 +252,9 @@ def global_shutdown(signum=None, frame=None):
         except Exception:
             pass
 
-    if active_wb is not None:
+    if excel_logger is not None:
         try:
-            active_wb.save(EXCEL_FILE)
-            print(f"[MANTA Ground Station] Registo final guardado em {EXCEL_FILE}")
+            excel_logger.stop()
         except Exception:
             pass
 
@@ -492,24 +600,12 @@ def main():
     timestamps = []
     raw_adcs = []
     start_time = None
-    last_excel_log_time = 0.0
     last_terminal_print_time = 0.0
 
-    if os.path.exists(EXCEL_FILE):
-        try:
-            os.remove(EXCEL_FILE)
-            print(f"Previous log file '{EXCEL_FILE}' deleted successfully.")
-        except Exception as e:
-            print(f"[Warning] Could not delete previous log file '{EXCEL_FILE}': {e}")
-
-    wb = Workbook()
-    active_wb = wb
-    ws = wb.active
-    ws.title = "MANTA Mission Telemetry Log"
-    ws.append(["Record Number", "Elapsed Time (s)", "Raw Sensor (ADC)", "Battery Voltage (V)", "Pitch (deg)", "Roll (deg)", "Yaw (deg)", "Latitude", "Longitude", "Altitude (m)", "Satellites", "Fix Type", "RSSI", "SNR"])
+    global excel_logger
+    excel_logger = AsyncExcelTelemetryLogger(EXCEL_FILE)
+    excel_logger.start()
     record_number = 1
-    wb.save(EXCEL_FILE)
-    print(f"Created new clean log file '{EXCEL_FILE}'.")
 
     send_throttle_command(current_throttle_pulse, force=True)
     buffer = ""
@@ -858,8 +954,8 @@ def main():
                                             print("  ╚══════════════════════════════════════════╝")
 
 
-                                    # Record every single packet at 20 Hz rate into Excel
-                                    ws.append([
+                                    # Record every single packet at 20 Hz rate asynchronously into Excel without blocking MAVLink / Serial
+                                    excel_logger.log_row([
                                         record_number,
                                         elapsed_sec,
                                         raw_adc,
@@ -876,14 +972,6 @@ def main():
                                         last_snr if last_snr is not None else ""
                                     ])
                                     record_number += 1
-
-                                    # Save Excel workbook to disk every 10.0s to maintain silky smooth 20 Hz serial throughput
-                                    if (now - last_excel_log_time) >= 10.0:
-                                        last_excel_log_time = now
-                                        try:
-                                            wb.save(EXCEL_FILE)
-                                        except Exception:
-                                            pass
 
 
             if mav_conn:
