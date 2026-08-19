@@ -60,14 +60,27 @@ datasets/
 *.pth
 
 # =========================
+# Telemetry & Flight Logs
+# =========================
+flight_logs/
+*.log
+*.xlsx
+!Code/Battery_Monitor/voltage_sensor_analysis.xlsx
+*.csv
+!tests/data/*.csv
+!tests/data/*.xlsx
+registo_manta_*.xlsx
+lora_battery_log.xlsx
+manta_*.csv
+manta_*.xlsx
+
+# =========================
 # Scratch & Test files
 # =========================
 scratch_*.py
-*.xlsx
-flight_logs/
-*.log
 compile_commands.json
 
 # Temporary IMU test project
 temp_imu_test/
+
 
