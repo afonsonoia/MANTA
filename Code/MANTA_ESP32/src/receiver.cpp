@@ -1,42 +1,17 @@
 #include "receiver.h"
 #include "config.h"
 
-#define MAX_FILTER_WINDOW 100
+// 1. Raw pulse durations directly from ISR: 0 = no signal received yet
+static volatile uint16_t rawChannelVector[5] = {0, 0, 0, 0, 0};
 
-// Saved channel vector: 0 = no signal received yet (ISR not triggered)
+// 2. Low-Pass Filter (80% previous / 20% new) - Auxiliary internal state only
+static float lpfChannelVector[5] = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
+
+// 3. Saved channel vector with deadband applied (sent outside as real receiver values)
 static volatile uint16_t savedChannelVector[5] = {0, 0, 0, 0, 0};
 
-// Dynamic RC Margin Deadband (default 4us)
+// Dynamic RC Margin Deadband (default from config.h)
 static volatile uint8_t rcMarginDeadband = DEFAULT_RC_MARGIN_DEADBAND;
-
-// Dynamic RC Noise Filter Configuration
-static volatile uint8_t rcFilterType = RC_FILTER_NONE; // Default: Raw (no filter)
-static volatile uint16_t rcFilterWindow = 5;            // Window size (used only when filter is active)
-static volatile float rcFilterAlpha = 0.33f;            // EMA alpha (used only when filter is active)
-
-// Ring buffers for SMA/WMA and state for EMA per channel (0..4)
-static uint16_t channelHistory[5][MAX_FILTER_WINDOW];
-static uint16_t historyHead[5] = {0, 0, 0, 0, 0};
-static uint16_t historyCount[5] = {0, 0, 0, 0, 0};
-static uint16_t emaState[5] = {1500, 1500, 1000, 1500, 1500};
-
-void setRCFilterConfig(uint8_t filterType, uint16_t windowSize, float alpha) {
-  if (filterType > 3) filterType = 1;
-  if (windowSize < 1) windowSize = 1;
-  if (windowSize > 20) windowSize = 20;
-  if (alpha < 0.01f) alpha = 0.01f;
-  if (alpha > 1.00f) alpha = 1.00f;
-
-  rcFilterType = filterType;
-  rcFilterWindow = windowSize;
-  rcFilterAlpha = alpha;
-}
-
-void getRCFilterConfig(uint8_t &filterType, uint16_t &windowSize, float &alpha) {
-  filterType = rcFilterType;
-  windowSize = rcFilterWindow;
-  alpha = rcFilterAlpha;
-}
 
 void setRCMarginDeadband(uint8_t deadbandUs) {
   if (deadbandUs < 1) deadbandUs = 1;
@@ -80,7 +55,6 @@ bool isRCQuietPeriod() {
 
 // CH5-based adaptive noise floor estimator.
 // CH5 is a binary switch (true values: ~1000us LOW or ~2000us HIGH).
-// Any deviation from those two values is pure measurable noise.
 static volatile uint16_t noiseFloorUs = 10; // Starts at 10us (clean environment)
 
 uint16_t getNoiseFloorUs() {
@@ -135,58 +109,26 @@ static inline void processChannelSample(uint8_t index, uint32_t dt) {
 
   lastRcPulseMicros = micros();
 
-  if (rcFilterType != RC_FILTER_NONE) {
-    // Push sample to channel history ring buffer
-    uint16_t head = historyHead[index];
-    channelHistory[index][head] = (uint16_t)dt;
-    historyHead[index] = (head + 1) % MAX_FILTER_WINDOW;
-    if (historyCount[index] < MAX_FILTER_WINDOW) {
-      historyCount[index]++;
-    }
+  // 3. Store raw channel sample from receiver
+  rawChannelVector[index] = (uint16_t)dt;
+
+  // 4. Low-Pass Filter (80% previous / 20% new) - Auxiliary internal state only
+  if (lpfChannelVector[index] <= 0.0f) {
+    lpfChannelVector[index] = (float)dt;
+  } else {
+    lpfChannelVector[index] = (0.80f * lpfChannelVector[index]) + (0.20f * (float)dt);
   }
 
-  uint16_t filteredVal = (uint16_t)dt; // Default: raw value
-
-  if (rcFilterType == RC_FILTER_SMA) {
-    uint16_t N = min((uint16_t)rcFilterWindow, historyCount[index]);
-    if (N == 0) N = 1;
-    uint32_t sum = 0;
-    for (uint16_t i = 0; i < N; i++) {
-      int idx = (historyHead[index] - 1 - i + MAX_FILTER_WINDOW) % MAX_FILTER_WINDOW;
-      sum += channelHistory[index][idx];
-    }
-    filteredVal = (uint16_t)(sum / N);
-  } else if (rcFilterType == RC_FILTER_EMA) {
-    uint32_t alphaPct = (uint32_t)(rcFilterAlpha * 100.0f);
-    if (alphaPct < 1) alphaPct = 1;
-    if (alphaPct > 100) alphaPct = 100;
-    uint32_t prevEma = (uint32_t)emaState[index];
-    uint32_t newEma = (alphaPct * (uint32_t)dt + (100 - alphaPct) * prevEma) / 100;
-    emaState[index] = (uint16_t)newEma;
-    filteredVal = (uint16_t)newEma;
-  } else if (rcFilterType == RC_FILTER_WMA) {
-    uint16_t N = min((uint16_t)rcFilterWindow, historyCount[index]);
-    if (N == 0) N = 1;
-    uint32_t weightedSum = 0;
-    uint32_t weightTotal = 0;
-    for (uint16_t i = 0; i < N; i++) {
-      uint32_t weight = N - i;
-      int idx = (historyHead[index] - 1 - i + MAX_FILTER_WINDOW) % MAX_FILTER_WINDOW;
-      weightedSum += channelHistory[index][idx] * weight;
-      weightTotal += weight;
-    }
-    filteredVal = (uint16_t)(weightedSum / weightTotal);
-  }
-
-  // Apply RC Margin Deadband filter: ignore variations smaller than rcMarginDeadband
+  // 5. Apply RC Margin Deadband on top of LPF output to update real receiver values
+  uint16_t lpfRounded = (uint16_t)(lpfChannelVector[index] + 0.5f);
   uint16_t currentSaved = savedChannelVector[index];
   if (currentSaved == 0) {
-    savedChannelVector[index] = filteredVal;
+    savedChannelVector[index] = lpfRounded;
   } else {
-    int diff = (int)filteredVal - (int)currentSaved;
+    int diff = (int)lpfRounded - (int)currentSaved;
     uint8_t db = rcMarginDeadband;
     if (diff > (int)db || diff < -((int)db)) {
-      savedChannelVector[index] = filteredVal;
+      savedChannelVector[index] = lpfRounded;
     }
   }
 }
@@ -322,4 +264,25 @@ void getReceiverChannels(uint16_t &ch1, uint16_t &ch2, uint16_t &ch3, uint16_t &
   ch4 = (v4 > 0) ? constrain(v4, 1000, 2000) : 0;
   // CH5 is a 2-position switch: >1500 -> 2000us, otherwise 1000us
   ch5 = (v5 > 0) ? ((v5 > 1500) ? 2000 : 1000) : 0;
+}
+
+void getRawReceiverChannels(uint16_t &ch1, uint16_t &ch2, uint16_t &ch3, uint16_t &ch4, uint16_t &ch5) {
+  noInterrupts();
+  uint16_t r1 = rawChannelVector[0];
+  uint16_t r2 = rawChannelVector[1];
+  uint16_t r3 = rawChannelVector[2];
+  uint16_t r4 = rawChannelVector[3];
+  uint16_t r5 = rawChannelVector[4];
+  interrupts();
+
+  if (isRCSignalLost()) {
+    ch1 = 0; ch2 = 0; ch3 = 0; ch4 = 0; ch5 = 0;
+    return;
+  }
+
+  ch1 = (r1 > 0) ? constrain(r1, 1000, 2000) : 0;
+  ch2 = (r2 > 0) ? constrain(r2, 1000, 2000) : 0;
+  ch3 = (r3 > 0) ? constrain(r3, 1000, 2000) : 0;
+  ch4 = (r4 > 0) ? constrain(r4, 1000, 2000) : 0;
+  ch5 = (r5 > 0) ? ((r5 > 1500) ? 2000 : 1000) : 0;
 }

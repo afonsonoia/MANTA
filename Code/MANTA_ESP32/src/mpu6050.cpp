@@ -90,8 +90,6 @@ void initMPU6050() {
     q3 = 0.0f;
     initialAttitudeSet = false;
     lastSampleTimeUs = 0;
-    Serial.println("[MPU6050 WARNING] IMU not detected on I2C bus! Continuing "
-                   "flight loop.");
     return;
   }
 
@@ -137,9 +135,6 @@ void initMPU6050() {
   eIntZ = 0.0f;
   initialAttitudeSet = false;
   lastSampleTimeUs = 0;
-  Serial.printf("[MPU6050 Mahony AHRS] Initialized (+/-250 deg/s, 98Hz DLPF) | "
-                "Gyro Bias: X=%.1f Y=%.1f Z=%.1f\n",
-                gyroBiasX, gyroBiasY, gyroBiasZ);
 }
 
 void sampleMPU6050Uniformly() {

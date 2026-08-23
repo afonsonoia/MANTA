@@ -124,7 +124,7 @@ static void controlTaskLoop(void *parameter) {
     unsigned long nowMs = millis();
 
     // ── STEP 2: RC margin deadband from persistent config
-    int servDeadband = (int)getRCMarginDeadband();
+    int receiverDeadband = (int)getRCMarginDeadband();
 
     // RC Failsafe: >500ms without RC pulse (getReceiverChannels returns 0s)
     bool rcSignalLost = isRCSignalLost();
@@ -221,12 +221,12 @@ static void controlTaskLoop(void *parameter) {
     int targetFR = constrain(1500 + rollOffsetFR + trimFR, minServoPulse, maxServoPulse);
     int targetFL = constrain(1500 + rollOffsetFL + trimFL, minServoPulse, maxServoPulse);
 
-    // ── STEP 6: Output — deadband applied (full for servos, half for throttle)
-    updateOutputChannel(0, servoBR, targetBR, servDeadband);
-    updateOutputChannel(1, servoBL, targetBL, servDeadband);
-    updateOutputChannel(2, servoFR, targetFR, servDeadband);
-    updateOutputChannel(3, servoFL, targetFL, servDeadband);
-    updateOutputChannel(4, escMotor, targetThrottle, max(1, servDeadband / 2));
+    // ── STEP 6: Output — uniform deadband applied to all channels (Servos + ESC)
+    updateOutputChannel(0, servoBR, targetBR, receiverDeadband);
+    updateOutputChannel(1, servoBL, targetBL, receiverDeadband);
+    updateOutputChannel(2, servoFR, targetFR, receiverDeadband);
+    updateOutputChannel(3, servoFL, targetFL, receiverDeadband);
+    updateOutputChannel(4, escMotor, targetThrottle, receiverDeadband);
 
   }
 }

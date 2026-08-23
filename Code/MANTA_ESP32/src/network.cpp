@@ -52,7 +52,6 @@ static bool attemptLoRaStart() {
     LoRa.setSyncWord(LORA_SYNC_WORD);
     LoRa.enableCrc();
     loraOnline = true;
-    Serial.println("[LoRa MANTA] Radio initialized (433 MHz, SF8, BW250k, CR4/5, SYNC 0x12) - Non-blocking Simplex TX!");
     return true;
   }
   loraOnline = false;
@@ -60,10 +59,7 @@ static bool attemptLoRaStart() {
 }
 
 void initNetwork() {
-  Serial.println("[LoRa MANTA] Initializing LoRa Radio on 433 MHz...");
-  if (!attemptLoRaStart()) {
-    Serial.println("[LoRa MANTA WARNING] LoRa radio not detected on boot! Flight loop will continue. Auto-reconnect active in background.");
-  }
+  attemptLoRaStart();
 }
 
 void handleNetworkCommands() {
@@ -86,9 +82,7 @@ void sendTelemetry(
     unsigned long now = millis();
     if (now - lastLoRaReconnectAttempt >= 2000) {
       lastLoRaReconnectAttempt = now;
-      if (attemptLoRaStart()) {
-        Serial.println("[LoRa MANTA] Background reconnect succeeded!");
-      }
+      attemptLoRaStart();
     }
     return; // Don't block flight controller while LoRa is offline
   }
@@ -109,13 +103,9 @@ void sendTelemetry(
     LoRa.endPacket(true); // Asynchronous / Non-blocking TX (never hangs the MCU)
     lastSuccessfulTxTime = millis();
     packetCount++;
-
-    Serial.printf("[LoRa MANTA TX #%u] Batt: %.2fV | Pitch: %.1f | Roll: %.1f | Alt: %.1fm\n",
-                  packetCount, batteryVoltage, pitch, roll, alt);
   } else {
     // If radio remains busy for > 200ms (stalled transmission), auto-recover
     if (lastSuccessfulTxTime > 0 && millis() - lastSuccessfulTxTime > 200) {
-      Serial.println("[LoRa WARNING] TX radio stalled (>200ms)! Reinitializing LoRa.");
       attemptLoRaStart();
       lastSuccessfulTxTime = millis();
     }

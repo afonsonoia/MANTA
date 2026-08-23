@@ -15,36 +15,19 @@ static unsigned long lastBatterySampleMillis = 0;
 void setup() {
   pinMode(2, OUTPUT);
   digitalWrite(2, HIGH); // Turn LED ON immediately on boot
-  Serial.begin(115200);
   delay(400);
   digitalWrite(2, LOW);
-  Serial.println("\n==================================================");
-  Serial.println("         MANTA ESP32 FLIGHT CONTROLLER            ");
-  Serial.println("==================================================");
 
   // Disable unused Wi-Fi & Bluetooth radios to minimize power consumption
   WiFi.mode(WIFI_OFF);
   btStop();
 
-  Serial.println("[BOOT] Initializing Battery Sensor...");
   initBatterySensor();
-
-  Serial.println("[BOOT] Initializing MPU6050...");
   initMPU6050();
-
-  Serial.println("[BOOT] Initializing BMP280...");
   initBMP280();
-
-  Serial.println("[BOOT] Initializing RC Receiver...");
   initReceiver();
-
-  Serial.println("[BOOT] Initializing Control System (Servos + ESC)...");
   initControlSystem();
-
-  Serial.println("[BOOT] Initializing LoRa Radio Network...");
   initNetwork();
-
-  Serial.println("[BOOT] Initialization complete! Entering flight loop.\n");
 }
 
 
