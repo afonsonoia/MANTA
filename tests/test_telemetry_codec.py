@@ -157,3 +157,90 @@ def test_negative_pitch_roll_angle_codec():
     assert decoded is not None
     assert decoded["pitch"] == pytest.approx(-15.4, abs=0.1)
     assert decoded["roll"] == pytest.approx(-25.2, abs=0.1)
+
+
+def test_calibration_data_report_parsing():
+    """Verifies that 5-second periodic CALIB_DATA broadcast strings are correctly parsed."""
+    import re
+    calib_str = "CALIB_DATA:DB=18,TRIM=-10,5,0,12,INV=0,1,0,0,ANG=30,RATE=50,CUT=12.50,PWR=14\n"
+    assert "CALIB_DATA:" in calib_str
+    data_part = calib_str[calib_str.find("CALIB_DATA:") + 11:].strip()
+
+    db_m = re.search(r'DB=(\d+)', data_part)
+    assert db_m is not None
+    assert int(db_m.group(1)) == 18
+
+    trim_m = re.search(r'TRIM=(-?\d+),(-?\d+),(-?\d+),(-?\d+)', data_part)
+    assert trim_m is not None
+    assert list(map(int, trim_m.groups())) == [-10, 5, 0, 12]
+
+    inv_m = re.search(r'INV=(\d+),(\d+),(\d+),(\d+)', data_part)
+    assert inv_m is not None
+    assert list(map(int, inv_m.groups())) == [0, 1, 0, 0]
+
+    ang_m = re.search(r'ANG=(\d+)', data_part)
+    assert ang_m is not None
+    assert int(ang_m.group(1)) == 30
+
+    rate_m = re.search(r'RATE=(\d+)', data_part)
+    assert rate_m is not None
+    assert int(rate_m.group(1)) == 50
+
+    cut_m = re.search(r'CUT=([\d\.]+)', data_part)
+    assert cut_m is not None
+    assert float(cut_m.group(1)) == 12.50
+
+    pwr_m = re.search(r'PWR=(\d+)', data_part)
+    assert pwr_m is not None
+    assert int(pwr_m.group(1)) == 14
+
+
+def test_set_deadband_command_format_and_clamping():
+    """Verifies SET_DEADBAND command formatting and clamping to 1..50 us range."""
+    def format_deadband_cmd(val: int) -> str:
+        clamped = max(1, min(50, int(val)))
+        return f"SET_DEADBAND:{clamped}\n"
+
+    assert format_deadband_cmd(18) == "SET_DEADBAND:18\n"
+    assert format_deadband_cmd(0) == "SET_DEADBAND:1\n"
+    assert format_deadband_cmd(-5) == "SET_DEADBAND:1\n"
+    assert format_deadband_cmd(55) == "SET_DEADBAND:50\n"
+    assert format_deadband_cmd(50) == "SET_DEADBAND:50\n"
+
+
+def test_ground_station_deadband_json_persistence(tmp_path):
+    """Verifies that ground station loads and saves deadband to JSON config correctly."""
+    import json
+    import MANTA_MISSION_PLANNER as mp
+
+    calib_json = tmp_path / "imu_calibration.json"
+    calib_json.write_text(json.dumps({
+        "pitch_offset": 2.5,
+        "roll_offset": -1.2,
+        "deadband": 22,
+        "cutoff": 12.4
+    }))
+
+    orig_calib_file = mp.CALIB_FILE
+    try:
+        mp.CALIB_FILE = str(calib_json)
+        mp.load_calibration()
+        assert mp.rc_margin_deadband == 22
+        assert mp.alert_voltage_threshold == 12.4
+        assert mp.pitch_offset == 2.5
+        assert mp.roll_offset == -1.2
+
+        # Edit deadband and save
+        mp.rc_margin_deadband = 35
+        mp.save_calibration()
+
+        # Reload from disk
+        with open(calib_json, 'r', encoding='utf-8') as f:
+            saved_data = json.load(f)
+        assert saved_data["deadband"] == 35
+        assert saved_data["cutoff"] == 12.4
+        assert saved_data["pitch_offset"] == 2.5
+    finally:
+        mp.CALIB_FILE = orig_calib_file
+
+

@@ -31,13 +31,14 @@ def encode_telemetry(
     gyro_x: int, gyro_y: int, gyro_z: int,
     rc1: int, rc2: int, rc3: int, rc5: int = 1000,
     battery_v: float = 0.0, alt: float = 0.0,
-    rc_signal_lost: bool = False
+    rc_signal_lost: bool = False,
+    is_calib_mode: bool = False
 ) -> bytes:
     pitch_x10 = int(round(pitch * 10))
     roll_x10 = int(round(roll * 10))
     bat_x100 = int(round(battery_v * 100))
     alt_x10 = int(round(alt * 10))
-    flags = 1 if rc_signal_lost else 0
+    flags = (1 if rc_signal_lost else 0) | (2 if is_calib_mode else 0)
 
     header = b"MT"
     payload_without_crc = struct.pack(
@@ -69,6 +70,11 @@ def decode_telemetry(packet_bytes: bytes) -> dict | None:
 
     if len(packet_bytes) == 33:
         unpacked = struct.unpack(PACKET_FORMAT_4CH, packet_bytes)
+        flags = unpacked[15]
+        rc1, rc2, rc3, rc5 = unpacked[9], unpacked[10], unpacked[11], unpacked[12]
+        bat_v = round(unpacked[13] / 100.0, 2)
+        sig_lost = bool(flags & 0x01)
+        calib_m = bool(flags & 0x02)
         return {
             "pitch": round(unpacked[1] / 10.0, 1),
             "roll": round(unpacked[2] / 10.0, 1),
@@ -78,14 +84,24 @@ def decode_telemetry(packet_bytes: bytes) -> dict | None:
             "gyro_x": unpacked[6],
             "gyro_y": unpacked[7],
             "gyro_z": unpacked[8],
-            "rc": [unpacked[9], unpacked[10], unpacked[11], unpacked[12]],
-            "batteryVoltage": round(unpacked[13] / 100.0, 2),
+            "rc": [rc1, rc2, rc3, rc5],
+            "rc1": rc1, "rc2": rc2, "rc3": rc3, "rc5": rc5,
+            "batteryVoltage": bat_v,
+            "battery_v": bat_v,
             "alt": round(unpacked[14] / 10.0, 1),
-            "rcSignalLost": bool(unpacked[15]),
+            "rcSignalLost": sig_lost,
+            "rc_signal_lost": sig_lost,
+            "isCalibMode": calib_m,
+            "is_calib_mode": calib_m,
             "packet_size": 33
         }
     elif len(packet_bytes) == 31:
         unpacked = struct.unpack(PACKET_FORMAT_3CH, packet_bytes)
+        flags = unpacked[14]
+        rc1, rc2, rc3 = unpacked[9], unpacked[10], unpacked[11]
+        bat_v = round(unpacked[12] / 100.0, 2)
+        sig_lost = bool(flags & 0x01)
+        calib_m = bool(flags & 0x02)
         return {
             "pitch": round(unpacked[1] / 10.0, 1),
             "roll": round(unpacked[2] / 10.0, 1),
@@ -95,14 +111,24 @@ def decode_telemetry(packet_bytes: bytes) -> dict | None:
             "gyro_x": unpacked[6],
             "gyro_y": unpacked[7],
             "gyro_z": unpacked[8],
-            "rc": [unpacked[9], unpacked[10], unpacked[11], 1000],
-            "batteryVoltage": round(unpacked[12] / 100.0, 2),
+            "rc": [rc1, rc2, rc3, 1000],
+            "rc1": rc1, "rc2": rc2, "rc3": rc3, "rc5": 1000,
+            "batteryVoltage": bat_v,
+            "battery_v": bat_v,
             "alt": round(unpacked[13] / 10.0, 1),
-            "rcSignalLost": bool(unpacked[14]),
+            "rcSignalLost": sig_lost,
+            "rc_signal_lost": sig_lost,
+            "isCalibMode": calib_m,
+            "is_calib_mode": calib_m,
             "packet_size": 31
         }
     elif len(packet_bytes) == 35:
         unpacked = struct.unpack(PACKET_FORMAT_5CH, packet_bytes)
+        flags = unpacked[16]
+        rc1, rc2, rc3, rc4, rc5 = unpacked[9], unpacked[10], unpacked[11], unpacked[12], unpacked[13]
+        bat_v = round(unpacked[14] / 100.0, 2)
+        sig_lost = bool(flags & 0x01)
+        calib_m = bool(flags & 0x02)
         return {
             "pitch": round(unpacked[1] / 10.0, 1),
             "roll": round(unpacked[2] / 10.0, 1),
@@ -112,9 +138,14 @@ def decode_telemetry(packet_bytes: bytes) -> dict | None:
             "gyro_x": unpacked[6],
             "gyro_y": unpacked[7],
             "gyro_z": unpacked[8],
-            "rc": [unpacked[9], unpacked[10], unpacked[11], unpacked[13]],
-            "batteryVoltage": round(unpacked[14] / 100.0, 2),
+            "rc": [rc1, rc2, rc3, rc5],
+            "rc1": rc1, "rc2": rc2, "rc3": rc3, "rc4": rc4, "rc5": rc5,
+            "batteryVoltage": bat_v,
+            "battery_v": bat_v,
             "alt": round(unpacked[15] / 10.0, 1),
-            "rcSignalLost": bool(unpacked[16]),
+            "rcSignalLost": sig_lost,
+            "rc_signal_lost": sig_lost,
+            "isCalibMode": calib_m,
+            "is_calib_mode": calib_m,
             "packet_size": 35
         }

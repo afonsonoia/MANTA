@@ -30,11 +30,7 @@ void setup() {
   initNetwork();
 }
 
-
 void loop() {
-  // Handle incoming commands over LoRa
-  handleNetworkCommands();
-
   unsigned long currentMillis = millis();
 
   // 1. High frequency uniform IMU sampling every 10ms (100 Hz sampling rate)
@@ -83,10 +79,10 @@ void loop() {
 
     bool rcLost = isRCSignalLost();
 
-    sendTelemetry(pitch, roll, accelX, accelY, accelZ, gyroX, gyroY, gyroZ, rch1, rch2, rch3, rch5, batteryVoltage, baroAlt, rcLost);
+    sendTelemetry(pitch, roll, accelX, accelY, accelZ, gyroX, gyroY, gyroZ, rch1, rch2, rch3, rch5, batteryVoltage, baroAlt, rcLost, false);
   }
 
-  // 3. Heartbeat LED pulse (500ms ON / 500ms OFF) to visually guarantee MCU is running
+  // 3. Heartbeat LED pulse (500ms in Flight Mode)
   static unsigned long lastHeartbeatMillis = 0;
   static bool heartbeatState = false;
   if (currentMillis - lastHeartbeatMillis >= 500) {
@@ -95,6 +91,3 @@ void loop() {
     digitalWrite(2, heartbeatState ? HIGH : LOW);
   }
 }
-
-
-

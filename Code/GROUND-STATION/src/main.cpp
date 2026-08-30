@@ -45,14 +45,35 @@ void setup() {
     LoRa.enableCrc();
     LoRa.receive();
 
+    pinMode(BUZZER_PIN, OUTPUT);
+    digitalWrite(BUZZER_PIN, LOW);
+
+    // Initial short beep on power-up
+    digitalWrite(BUZZER_PIN, HIGH);
+    delay(50);
+    digitalWrite(BUZZER_PIN, LOW);
+
     Serial.println("[LORA GS] LoRa Radio ready (433MHz, SF8, BW250k, CR4/5, SYNC 0x12)!");
     Serial.println("[LORA GS] Continuous Simplex RX active - listening for MANTA packets...\n");
 }
 
 static unsigned long lastPacketTime = 0;
 static unsigned long lastRxCheck = 0;
+static bool intermittentBeep = false;
+static unsigned long lastBeepToggle = 0;
+static bool beepState = false;
 
 void loop() {
+    // Intermittent alarm buzzer handler
+    if (intermittentBeep) {
+        unsigned long now = millis();
+        if (now - lastBeepToggle >= 250) {
+            lastBeepToggle = now;
+            beepState = !beepState;
+            digitalWrite(BUZZER_PIN, beepState ? HIGH : LOW);
+        }
+    }
+
     // 1. Check for incoming LoRa packets from MANTA
     int packetSize = LoRa.parsePacket();
     if (packetSize > 0) {
@@ -78,6 +99,32 @@ void loop() {
         if (now - lastPacketTime > 1000 && now - lastRxCheck > 500) {
             lastRxCheck = now;
             LoRa.receive();
+        }
+    }
+
+    // 2. Check for buzzer commands from PC Serial
+    static char serialCmdBuf[64];
+    static int serialCmdIdx = 0;
+    while (Serial.available()) {
+        char c = (char)Serial.read();
+        if (c == '\n' || c == '\r') {
+            if (serialCmdIdx > 0) {
+                serialCmdBuf[serialCmdIdx] = '\0';
+
+                if (strncmp(serialCmdBuf, "BEEP:SHORT", 10) == 0) {
+                    digitalWrite(BUZZER_PIN, HIGH);
+                    delay(50);
+                    digitalWrite(BUZZER_PIN, LOW);
+                } else if (strncmp(serialCmdBuf, "BEEP:INTERMITTENT", 17) == 0) {
+                    intermittentBeep = true;
+                } else if (strncmp(serialCmdBuf, "BEEP:OFF", 8) == 0) {
+                    intermittentBeep = false;
+                    digitalWrite(BUZZER_PIN, LOW);
+                }
+                serialCmdIdx = 0;
+            }
+        } else if (serialCmdIdx < (int)sizeof(serialCmdBuf) - 1) {
+            serialCmdBuf[serialCmdIdx++] = c;
         }
     }
 }

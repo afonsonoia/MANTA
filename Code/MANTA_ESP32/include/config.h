@@ -22,7 +22,9 @@ constexpr int PIN_SERVO_FL = 26; // Front Left (GPIO26)
 
 // Control System Hysteresis & Thermal Protection Constants
 constexpr uint8_t DEFAULT_RC_MARGIN_DEADBAND =
-    18; // Hysteresis threshold in us (ignore PWM jitter < 18us)
+    4;  // Median filter already eliminates ISR jitter — 4us deadband prevents servo buzz without masking real stick input
+constexpr uint8_t DEFAULT_SERVO_OUTPUT_DEADBAND =
+    4;  // Output servo jitter threshold in us (prevents servo buzzing without sacrificing stick resolution)
 constexpr uint16_t DEFAULT_SERVO_MIN_UPDATE_INTERVAL_MS =
     67; // 67ms interval between servo updates (15 Hz max)
 constexpr unsigned long SERVO_KEEPALIVE_INTERVAL_MS =
@@ -74,8 +76,6 @@ constexpr unsigned long LOGGING_INTERVAL_MS =
 
 constexpr unsigned long SAMPLE_INTERVAL_MS =
     10; // High frequency IMU sampling every 10ms (100 Hz sampling)
-constexpr int MA_WINDOW_SIZE =
-    15; // Moving average filter window size (15 samples @ 250Hz)
 constexpr int ADC_OVERSAMPLE_PER_TICK =
     8; // 8 burst readings per sample tick for ADC noise filtering
 

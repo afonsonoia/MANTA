@@ -1,4 +1,6 @@
 {
   "pitch_offset": 6.1,
-  "roll_offset": -3.1
+  "roll_offset": -3.1,
+  "deadband": 18,
+  "cutoff": 12.5
 }

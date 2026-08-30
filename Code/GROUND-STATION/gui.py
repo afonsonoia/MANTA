@@ -5,6 +5,17 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 import serial
 import serial.tools.list_ports
+import os
+import json
+
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+_ROOT_DIR = os.path.abspath(os.path.join(_SCRIPT_DIR, '..', '..'))
+if os.path.exists(os.path.join(_ROOT_DIR, 'imu_calibration.json')):
+    CALIB_FILE = os.path.join(_ROOT_DIR, 'imu_calibration.json')
+elif os.path.exists('imu_calibration.json'):
+    CALIB_FILE = os.path.abspath('imu_calibration.json')
+else:
+    CALIB_FILE = os.path.join(_ROOT_DIR, 'imu_calibration.json')
 
 
 class SimpleGroundStationGUI:
@@ -116,12 +127,34 @@ class SimpleGroundStationGUI:
         self.spin_rc_alpha.delete(0, tk.END); self.spin_rc_alpha.insert(0, "0.33")
         self.spin_rc_alpha.grid(row=2, column=3, sticky="w", padx=4, pady=4)
 
+        initial_db = 18
+        if os.path.exists(CALIB_FILE):
+            try:
+                with open(CALIB_FILE, 'r', encoding='utf-8') as f:
+                    c_data = json.load(f)
+                    if 'deadband' in c_data:
+                        initial_db = max(1, min(50, int(c_data['deadband'])))
+            except Exception:
+                pass
+
+        tk.Label(filter_card, text="Deadband (us):", bg=self.CARD_BG, fg=self.TEXT_COLOR).grid(row=3, column=0, sticky="w", pady=4)
+        self.spin_deadband = tk.Spinbox(filter_card, from_=1, to=50, width=5, bg=self.LOG_BG, fg=self.TEXT_COLOR, insertbackground=self.TEXT_COLOR)
+        self.spin_deadband.delete(0, tk.END); self.spin_deadband.insert(0, str(initial_db))
+        self.spin_deadband.grid(row=3, column=1, sticky="w", padx=4, pady=4)
+
+        self.btn_apply_deadband = tk.Button(
+            filter_card, text="SET DEADBAND", command=self.apply_deadband,
+            font=("Segoe UI", 8, "bold"), bg=self.ACCENT_CYAN, fg="#11111b",
+            activebackground="#89dceb", bd=0, padx=6, pady=2, cursor="hand2", state="disabled"
+        )
+        self.btn_apply_deadband.grid(row=3, column=2, columnspan=2, sticky="e", padx=4, pady=4)
+
         self.btn_apply_filter = tk.Button(
             filter_card, text="APPLY RC FILTER SETTINGS", command=self.apply_rc_filter,
             font=("Segoe UI", 9, "bold"), bg=self.ACCENT_GREEN, fg="#11111b",
             activebackground="#a6e3a1", bd=0, pady=4, cursor="hand2", state="disabled"
         )
-        self.btn_apply_filter.grid(row=3, column=0, columnspan=4, sticky="ew", pady=(6, 0))
+        self.btn_apply_filter.grid(row=4, column=0, columnspan=4, sticky="ew", pady=(6, 0))
 
         # --- BUZZER CONTROL ACTIONS CARD ---
         ctrl_card = tk.Frame(self.root, bg=self.CARD_BG, bd=0, relief="flat", padx=15, pady=10)
@@ -233,8 +266,28 @@ class SimpleGroundStationGUI:
         self.log("[CONNECTION] Disconnected.")
 
     def _set_buttons_state(self, state):
-        for btn in [self.btn_continuous, self.btn_intermittent, self.btn_off, self.btn_calib_trim, self.btn_apply_filter]:
+        for btn in [self.btn_continuous, self.btn_intermittent, self.btn_off, self.btn_calib_trim, self.btn_apply_filter, self.btn_apply_deadband]:
             btn.config(state=state)
+
+    def apply_deadband(self):
+        try:
+            db_val = int(self.spin_deadband.get().strip())
+            if db_val < 1: db_val = 1
+            if db_val > 50: db_val = 50
+            cmd = f"SET_DEADBAND:{db_val}"
+            self.send_cmd(cmd)
+            if os.path.exists(CALIB_FILE):
+                try:
+                    with open(CALIB_FILE, 'r', encoding='utf-8') as f:
+                        c_dict = json.load(f)
+                except Exception:
+                    c_dict = {}
+                c_dict['deadband'] = db_val
+                with open(CALIB_FILE, 'w', encoding='utf-8') as f:
+                    json.dump(c_dict, f, indent=2)
+            messagebox.showinfo("Deadband Config", f"Sent Deadband update to MANTA: {db_val} us (saved to config)")
+        except Exception as e:
+            messagebox.showerror("Deadband Error", f"Invalid deadband value: {e}")
 
     def calibrate_trim(self):
         self.send_cmd("CALIB_TRIM")
@@ -290,6 +343,16 @@ class SimpleGroundStationGUI:
                 if self.serial_conn.in_waiting > 0:
                     line = self.serial_conn.readline().decode('utf-8', errors='ignore').strip()
                     if line:
+                        if "CALIB_DATA:" in line:
+                            try:
+                                import re
+                                data_part = line[line.find("CALIB_DATA:") + 11:].strip()
+                                db_m = re.search(r'DB=(\d+)', data_part)
+                                if db_m:
+                                    db_val = db_m.group(1)
+                                    self.root.after(0, lambda v=db_val: (self.spin_deadband.delete(0, tk.END), self.spin_deadband.insert(0, v)))
+                            except Exception:
+                                pass
                         self.root.after(0, self.log, f"[RX] <- {line}")
             except Exception:
                 break

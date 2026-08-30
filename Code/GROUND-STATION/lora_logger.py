@@ -9,6 +9,7 @@ import serial
 import serial.tools.list_ports
 import openpyxl
 from openpyxl import Workbook
+import json
 from raw_lora_logger import AsyncRawLoRaLogger
 
 # Try importing matplotlib for embedded live plot
@@ -25,6 +26,15 @@ except ImportError:
 DEFAULT_BAUD = 115200
 EXCEL_FILE = 'lora_battery_log.xlsx'
 DEFAULT_ALERT_VOLTAGE = 12.50
+
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+_ROOT_DIR = os.path.abspath(os.path.join(_SCRIPT_DIR, '..', '..'))
+if os.path.exists(os.path.join(_ROOT_DIR, 'imu_calibration.json')):
+    CALIB_FILE = os.path.join(_ROOT_DIR, 'imu_calibration.json')
+elif os.path.exists('imu_calibration.json'):
+    CALIB_FILE = os.path.abspath('imu_calibration.json')
+else:
+    CALIB_FILE = os.path.join(_ROOT_DIR, 'imu_calibration.json')
 
 def calculate_battery_voltage(raw_adc):
     """Calculates battery voltage matching the ESP32 polynomial equation:
@@ -62,6 +72,14 @@ class BatteryAnalyzerGUI:
         # Last Known Calibration State for Change Logging
         self.last_angle = 30
         self.last_deadband = 18
+        if os.path.exists(CALIB_FILE):
+            try:
+                with open(CALIB_FILE, 'r', encoding='utf-8') as f:
+                    c_data = json.load(f)
+                    if 'deadband' in c_data:
+                        self.last_deadband = max(1, min(50, int(c_data['deadband'])))
+            except Exception:
+                pass
         self.last_trims = [0, 0, 0, 0]
         self.last_inv = [0, 0, 0, 0]
         self.last_alert_voltage = 12.50
@@ -220,36 +238,48 @@ class BatteryAnalyzerGUI:
 
         # Row 1: Servo Rotation Max Angle Limit & RC Deadband
         tk.Label(calib_card, text="Max Angle (deg):", bg=self.CARD_BG, fg=self.TEXT_COLOR).grid(row=1, column=0, sticky="w", padx=2)
-        self.spin_angle = tk.Spinbox(calib_card, from_=10, to=45, width=4, bg=self.LOG_BG, fg=self.TEXT_COLOR, insertbackground=self.TEXT_COLOR)
+        self.spin_angle = tk.Spinbox(calib_card, from_=10, to=45, width=4, bg=self.LOG_BG, fg=self.TEXT_COLOR, insertbackground=self.TEXT_COLOR, command=self.send_servo_angle_live)
         self.spin_angle.delete(0, tk.END); self.spin_angle.insert(0, "30")
         self.spin_angle.grid(row=1, column=1, sticky="w", padx=2)
+        self.spin_angle.bind("<Return>", lambda e: self.send_servo_angle_live())
+        self.spin_angle.bind("<FocusOut>", lambda e: self.send_servo_angle_live())
 
         tk.Label(calib_card, text="RC Deadband (us):", bg=self.CARD_BG, fg=self.TEXT_COLOR).grid(row=1, column=2, sticky="w", padx=(8, 2))
-        self.spin_deadband = tk.Spinbox(calib_card, from_=1, to=50, width=4, bg=self.LOG_BG, fg=self.TEXT_COLOR, insertbackground=self.TEXT_COLOR)
-        self.spin_deadband.delete(0, tk.END); self.spin_deadband.insert(0, "18")
+        self.spin_deadband = tk.Spinbox(calib_card, from_=1, to=50, width=4, bg=self.LOG_BG, fg=self.TEXT_COLOR, insertbackground=self.TEXT_COLOR, command=self.send_deadband_live)
+        self.spin_deadband.delete(0, tk.END); self.spin_deadband.insert(0, str(self.last_deadband))
         self.spin_deadband.grid(row=1, column=3, sticky="w", padx=2)
+        self.spin_deadband.bind("<Return>", lambda e: self.send_deadband_live())
+        self.spin_deadband.bind("<FocusOut>", lambda e: self.send_deadband_live())
 
         # Fine Trims per servo (us)
         tk.Label(calib_card, text="BR (us):", bg=self.CARD_BG, fg=self.TEXT_COLOR).grid(row=1, column=4, sticky="w", padx=(8, 2))
         self.spin_br = tk.Spinbox(calib_card, from_=-250, to=250, width=5, bg=self.LOG_BG, fg=self.TEXT_COLOR, insertbackground=self.TEXT_COLOR, command=self.send_servo_trim_live)
         self.spin_br.delete(0, tk.END); self.spin_br.insert(0, "0")
         self.spin_br.grid(row=1, column=5, sticky="w", padx=2)
+        self.spin_br.bind("<Return>", lambda e: self.send_servo_trim_live())
+        self.spin_br.bind("<FocusOut>", lambda e: self.send_servo_trim_live())
 
         tk.Label(calib_card, text="BL (us):", bg=self.CARD_BG, fg=self.TEXT_COLOR).grid(row=1, column=6, sticky="w", padx=(6, 2))
         self.spin_bl = tk.Spinbox(calib_card, from_=-250, to=250, width=5, bg=self.LOG_BG, fg=self.TEXT_COLOR, insertbackground=self.TEXT_COLOR, command=self.send_servo_trim_live)
         self.spin_bl.delete(0, tk.END); self.spin_bl.insert(0, "0")
         self.spin_bl.grid(row=1, column=7, sticky="w", padx=2)
+        self.spin_bl.bind("<Return>", lambda e: self.send_servo_trim_live())
+        self.spin_bl.bind("<FocusOut>", lambda e: self.send_servo_trim_live())
 
         # Row 2: FR, FL trim, Direction Invert Checkbuttons & Save Button
         tk.Label(calib_card, text="FR (us):", bg=self.CARD_BG, fg=self.TEXT_COLOR).grid(row=2, column=0, sticky="w", padx=2, pady=4)
         self.spin_fr = tk.Spinbox(calib_card, from_=-250, to=250, width=5, bg=self.LOG_BG, fg=self.TEXT_COLOR, insertbackground=self.TEXT_COLOR, command=self.send_servo_trim_live)
         self.spin_fr.delete(0, tk.END); self.spin_fr.insert(0, "0")
         self.spin_fr.grid(row=2, column=1, sticky="w", padx=2, pady=4)
+        self.spin_fr.bind("<Return>", lambda e: self.send_servo_trim_live())
+        self.spin_fr.bind("<FocusOut>", lambda e: self.send_servo_trim_live())
 
         tk.Label(calib_card, text="FL (us):", bg=self.CARD_BG, fg=self.TEXT_COLOR).grid(row=2, column=2, sticky="w", padx=(8, 2), pady=4)
         self.spin_fl = tk.Spinbox(calib_card, from_=-250, to=250, width=5, bg=self.LOG_BG, fg=self.TEXT_COLOR, insertbackground=self.TEXT_COLOR, command=self.send_servo_trim_live)
         self.spin_fl.delete(0, tk.END); self.spin_fl.insert(0, "0")
         self.spin_fl.grid(row=2, column=3, sticky="w", padx=2, pady=4)
+        self.spin_fl.bind("<Return>", lambda e: self.send_servo_trim_live())
+        self.spin_fl.bind("<FocusOut>", lambda e: self.send_servo_trim_live())
 
         self.var_inv_br = tk.BooleanVar(value=False)
         self.var_inv_bl = tk.BooleanVar(value=False)
@@ -263,14 +293,18 @@ class BatteryAnalyzerGUI:
 
         # Row 3: Alert Voltage (V), Servo Rate (ms), LoRa Power Boost & Save to Flash Button
         tk.Label(calib_card, text="Alert V:", bg=self.CARD_BG, fg=self.TEXT_COLOR, font=("Segoe UI", 9, "bold")).grid(row=3, column=0, sticky="w", padx=2, pady=4)
-        self.spin_alert_voltage = tk.Spinbox(calib_card, from_=12.00, to=16.00, increment=0.10, width=5, bg=self.LOG_BG, fg=self.TEXT_COLOR, insertbackground=self.TEXT_COLOR)
+        self.spin_alert_voltage = tk.Spinbox(calib_card, from_=12.00, to=16.00, increment=0.10, width=5, bg=self.LOG_BG, fg=self.TEXT_COLOR, insertbackground=self.TEXT_COLOR, command=self.send_cutoff_live)
         self.spin_alert_voltage.delete(0, tk.END); self.spin_alert_voltage.insert(0, "12.50")
         self.spin_alert_voltage.grid(row=3, column=1, sticky="w", padx=2, pady=4)
+        self.spin_alert_voltage.bind("<Return>", lambda e: self.send_cutoff_live())
+        self.spin_alert_voltage.bind("<FocusOut>", lambda e: self.send_cutoff_live())
 
         tk.Label(calib_card, text="Rate (ms):", bg=self.CARD_BG, fg=self.TEXT_COLOR, font=("Segoe UI", 9, "bold")).grid(row=3, column=2, sticky="w", padx=(6, 2), pady=4)
-        self.spin_servo_rate = tk.Spinbox(calib_card, from_=5, to=100, increment=5, width=4, bg=self.LOG_BG, fg=self.TEXT_COLOR, insertbackground=self.TEXT_COLOR)
+        self.spin_servo_rate = tk.Spinbox(calib_card, from_=5, to=100, increment=5, width=4, bg=self.LOG_BG, fg=self.TEXT_COLOR, insertbackground=self.TEXT_COLOR, command=self.send_servo_rate_live)
         self.spin_servo_rate.delete(0, tk.END); self.spin_servo_rate.insert(0, "50")
         self.spin_servo_rate.grid(row=3, column=3, sticky="w", padx=2, pady=4)
+        self.spin_servo_rate.bind("<Return>", lambda e: self.send_servo_rate_live())
+        self.spin_servo_rate.bind("<FocusOut>", lambda e: self.send_servo_rate_live())
 
         self.btn_toggle_power = tk.Button(
             calib_card, text="LORA POWER: STANDARD (14 dBm)", command=self.toggle_lora_power,
@@ -535,8 +569,83 @@ class BatteryAnalyzerGUI:
             except Exception as e:
                 print(f"[LoRa TX Error] {e}")
 
-    def save_all_calibration_nvs(self):
+    def send_deadband_live(self):
         if self.is_connected and self.serial_conn and self.serial_conn.is_open:
+            try:
+                db_val = int(self.spin_deadband.get())
+                if db_val < 1: db_val = 1
+                if db_val > 50: db_val = 50
+                cmd = f"SET_DEADBAND:{db_val}\n"
+                for _ in range(2):
+                    self.serial_conn.write(cmd.encode('utf-8'))
+                    self.serial_conn.flush()
+                    time.sleep(0.05)
+                self.async_raw_logger.log_packet("TX", cmd.strip())
+                if os.path.exists(CALIB_FILE):
+                    try:
+                        with open(CALIB_FILE, 'r', encoding='utf-8') as f:
+                            c_dict = json.load(f)
+                    except Exception:
+                        c_dict = {}
+                    c_dict['deadband'] = db_val
+                    with open(CALIB_FILE, 'w', encoding='utf-8') as f:
+                        json.dump(c_dict, f, indent=2)
+                print(f"[LoRa TX Live] {cmd.strip()}")
+            except Exception as e:
+                print(f"[LoRa TX Error] {e}")
+
+    def send_servo_angle_live(self):
+        if self.is_connected and self.serial_conn and self.serial_conn.is_open:
+            try:
+                angle_val = int(self.spin_angle.get())
+                if angle_val < 10: angle_val = 10
+                if angle_val > 45: angle_val = 45
+                cmd = f"SET_SERVO_ANGLE:{angle_val}\n"
+                for _ in range(2):
+                    self.serial_conn.write(cmd.encode('utf-8'))
+                    self.serial_conn.flush()
+                    time.sleep(0.05)
+                self.async_raw_logger.log_packet("TX", cmd.strip())
+                print(f"[LoRa TX Live] {cmd.strip()}")
+            except Exception as e:
+                print(f"[LoRa TX Error] {e}")
+
+    def send_servo_rate_live(self):
+        if self.is_connected and self.serial_conn and self.serial_conn.is_open:
+            try:
+                rate_val = int(self.spin_servo_rate.get())
+                if rate_val < 5: rate_val = 5
+                if rate_val > 100: rate_val = 100
+                cmd = f"SET_SERVO_INTERVAL:{rate_val}\n"
+                for _ in range(2):
+                    self.serial_conn.write(cmd.encode('utf-8'))
+                    self.serial_conn.flush()
+                    time.sleep(0.05)
+                self.async_raw_logger.log_packet("TX", cmd.strip())
+                print(f"[LoRa TX Live] {cmd.strip()}")
+            except Exception as e:
+                print(f"[LoRa TX Error] {e}")
+
+    def send_cutoff_live(self):
+        if self.is_connected and self.serial_conn and self.serial_conn.is_open:
+            try:
+                alert_val = self.get_validated_alert_voltage()
+                cmd = f"CUTOFF:{alert_val:.2f}\n"
+                for _ in range(2):
+                    self.serial_conn.write(cmd.encode('utf-8'))
+                    self.serial_conn.flush()
+                    time.sleep(0.05)
+                self.async_raw_logger.log_packet("TX", cmd.strip())
+                print(f"[LoRa TX Live] {cmd.strip()}")
+            except Exception as e:
+                print(f"[LoRa TX Error] {e}")
+
+    def save_all_calibration_nvs(self):
+        if not (self.is_connected and self.serial_conn and self.serial_conn.is_open):
+            messagebox.showwarning("Warning", "Please connect serial port before saving calibration!")
+            return
+
+        def _worker():
             try:
                 angle_val = int(self.spin_angle.get())
                 deadband_val = int(self.spin_deadband.get())
@@ -567,24 +676,16 @@ class BatteryAnalyzerGUI:
                 self.last_received_ack = None
 
                 for cmd in cmds_list:
-                    self.serial_conn.write(cmd.encode('utf-8'))
-                    self.serial_conn.flush()
-                    time.sleep(0.06)
-
-                self.async_raw_logger.log_packet("TX", cmd_angle.strip())
-                self.async_raw_logger.log_packet("TX", cmd_db.strip())
-                self.async_raw_logger.log_packet("TX", cmd_rate.strip())
-                self.async_raw_logger.log_packet("TX", cmd_pwr.strip())
-                self.async_raw_logger.log_packet("TX", cmd_cutoff.strip())
-                self.async_raw_logger.log_packet("TX", cmd_trim.strip())
-                self.async_raw_logger.log_packet("TX", cmd_inv.strip())
-                self.async_raw_logger.log_packet("TX", cmd_save.strip())
+                    if self.serial_conn and self.serial_conn.is_open:
+                        self.serial_conn.write(cmd.encode('utf-8'))
+                        self.serial_conn.flush()
+                        time.sleep(0.06)
+                        self.async_raw_logger.log_packet("TX", cmd.strip())
 
                 # Wait up to 3.0 seconds for CALIB_SAVE ACK confirmation from MANTA over LoRa
                 ack_confirmed = False
                 wait_start = time.time()
                 while time.time() - wait_start < 3.0:
-                    self.root.update()
                     if self.last_received_ack and "CALIB_SAVE" in self.last_received_ack:
                         ack_confirmed = True
                         break
@@ -594,13 +695,13 @@ class BatteryAnalyzerGUI:
                     ack_confirmed = True
 
                 if ack_confirmed:
-                    messagebox.showinfo("Calibration Saved", f"CONFIRMED: MANTA acknowledged ({self.last_received_ack}) and saved all parameters to Flash NVS!")
+                    self.root.after(0, lambda: messagebox.showinfo("Calibration Saved", f"CONFIRMED: MANTA acknowledged ({self.last_received_ack}) and saved all parameters to Flash NVS!"))
                 else:
-                    messagebox.showwarning("ACK Timeout", "Commands transmitted to Ground Station, but no ACK confirmation was received back from MANTA over LoRa. Check radio link.")
+                    self.root.after(0, lambda: messagebox.showwarning("ACK Timeout", "Commands transmitted to Ground Station, but no ACK confirmation was received back from MANTA over LoRa. Check radio link."))
             except Exception as e:
-                messagebox.showerror("Error", f"Failed to send calibration parameters: {e}")
-        else:
-            messagebox.showwarning("Warning", "Please connect serial port before saving calibration!")
+                self.root.after(0, lambda err=e: messagebox.showerror("Error", f"Failed to send calibration parameters: {err}"))
+
+        threading.Thread(target=_worker, daemon=True).start()
 
     def apply_rc_filter(self):
         if not self.serial_conn or not self.is_connected:
@@ -716,7 +817,6 @@ class BatteryAnalyzerGUI:
                             pkt_bin = bytes(raw_bytes_buffer[:PACKET_SIZE])
                             decoded_pkt = decode_telemetry(pkt_bin)
                             if decoded_pkt is not None:
-                                self.last_manta_confirmed_deadband = decoded_pkt.get("deadband", 25)
                                 rec_v = decoded_pkt.get("batteryVoltage", 0.0)
                                 raw_adc = decoded_pkt.get("rawADC", 0.0)
                                 self._process_voltage_sample(rec_v, raw_adc)
@@ -773,13 +873,106 @@ class BatteryAnalyzerGUI:
             # Update UI on Main Thread
             self.root.after(0, self._update_ui_metrics, voltage, raw_adc, elapsed_sec)
 
+    def _update_calib_ui(self, db_val, trims, invs, ang_val, rate_val, cut_val, pwr_val):
+        try:
+            if db_val is not None:
+                self.spin_deadband.delete(0, tk.END)
+                self.spin_deadband.insert(0, str(db_val))
+            if trims is not None:
+                br, bl, fr, fl = trims
+                self.spin_br.delete(0, tk.END); self.spin_br.insert(0, str(br))
+                self.spin_bl.delete(0, tk.END); self.spin_bl.insert(0, str(bl))
+                self.spin_fr.delete(0, tk.END); self.spin_fr.insert(0, str(fr))
+                self.spin_fl.delete(0, tk.END); self.spin_fl.insert(0, str(fl))
+            if invs is not None:
+                ibr, ibl, ifr, ifl = invs
+                self.var_inv_br.set(bool(ibr))
+                self.var_inv_bl.set(bool(ibl))
+                self.var_inv_fr.set(bool(ifr))
+                self.var_inv_fl.set(bool(ifl))
+            if ang_val is not None:
+                self.spin_angle.delete(0, tk.END); self.spin_angle.insert(0, str(ang_val))
+            if rate_val is not None:
+                self.spin_servo_rate.delete(0, tk.END); self.spin_servo_rate.insert(0, str(rate_val))
+            if cut_val is not None:
+                self.spin_alert_voltage.delete(0, tk.END); self.spin_alert_voltage.insert(0, f"{cut_val:.2f}")
+            if pwr_val is not None:
+                p_name = "HIGH (20 dBm)" if pwr_val >= 20 else ("LOW (2 dBm)" if pwr_val <= 2 else f"STANDARD ({pwr_val} dBm)")
+                self.btn_toggle_power.config(text=f"LORA POWER: {p_name}")
+            self.lbl_status.config(text=f"SYNC: DB={self.last_deadband}us Trims={self.last_trims}", fg=self.ACCENT_CYAN)
+        except Exception as e:
+            print(f"[UI Sync Error] {e}")
+
     def _parse_telemetry_line(self, line_str):
+        if "CALIB_DATA:" in line_str:
+            try:
+                data_part = line_str[line_str.find("CALIB_DATA:") + 11:].strip()
+                db_val = None
+                db_m = re.search(r'DB=(\d+)', data_part)
+                if db_m:
+                    db_val = int(db_m.group(1))
+                    self.last_deadband = db_val
+                    self.last_manta_confirmed_deadband = db_val
+
+                trims = None
+                trim_m = re.search(r'TRIM=(-?\d+),(-?\d+),(-?\d+),(-?\d+)', data_part)
+                if trim_m:
+                    br, bl, fr, fl = map(int, trim_m.groups())
+                    trims = (br, bl, fr, fl)
+                    self.last_trims = [br, bl, fr, fl]
+
+                invs = None
+                inv_m = re.search(r'INV=(\d+),(\d+),(\d+),(\d+)', data_part)
+                if inv_m:
+                    ibr, ibl, ifr, ifl = map(int, inv_m.groups())
+                    invs = (ibr, ibl, ifr, ifl)
+                    self.last_inv = [ibr, ibl, ifr, ifl]
+
+                ang_val = None
+                ang_m = re.search(r'ANG=(\d+)', data_part)
+                if ang_m:
+                    ang_val = int(ang_m.group(1))
+                    self.last_angle = ang_val
+
+                rate_val = None
+                rate_m = re.search(r'RATE=(\d+)', data_part)
+                if rate_m:
+                    rate_val = int(rate_m.group(1))
+                    self.last_servo_interval = rate_val
+
+                cut_val = None
+                cut_m = re.search(r'CUT=([\d\.]+)', data_part)
+                if cut_m:
+                    cut_val = float(cut_m.group(1))
+                    self.last_alert_voltage = cut_val
+
+                pwr_val = None
+                pwr_m = re.search(r'PWR=(\d+)', data_part)
+                if pwr_m:
+                    pwr_val = int(pwr_m.group(1))
+                    self.last_lora_power = pwr_val
+
+                status_msg = f"MANTA Sync (5s): DB={self.last_deadband}us | Ang={self.last_angle}° | Trims={self.last_trims}"
+                print(f"  [CALIB SYNC RECEIVED] {status_msg}")
+
+                # Safely update Tkinter UI widgets on main thread
+                self.root.after(0, self._update_calib_ui, db_val, trims, invs, ang_val, rate_val, cut_val, pwr_val)
+            except Exception as e:
+                print(f"[CALIB Parse Error] {e}")
+
         if "ACK:" in line_str:
             try:
                 ack_content = line_str[line_str.find("ACK:"):].split()[0]
                 self.last_received_ack = ack_content
                 print(f"  [ACK RECEIVED] MANTA confirmed: {ack_content}")
-                self.lbl_status.config(text=f"ACK: {ack_content}", fg=self.ACCENT_GREEN)
+                self.root.after(0, lambda ack=ack_content: self.lbl_status.config(text=f"ACK: {ack}", fg=self.ACCENT_GREEN))
+                if "ACK:DEADBAND:" in ack_content or "ACK:DB:" in ack_content:
+                    try:
+                        db_val = int(re.search(r'\d+', ack_content).group(0))
+                        self.last_deadband = db_val
+                        self.last_manta_confirmed_deadband = db_val
+                    except Exception:
+                        pass
             except Exception:
                 pass
 

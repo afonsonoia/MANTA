@@ -10,7 +10,7 @@
 static uint8_t currentLoRaPower = LORA_TX_POWER;
 static bool loraOnline = false;
 static unsigned long lastLoRaReconnectAttempt = 0;
-static unsigned long lastTxStartTime = 0;
+static unsigned long lastSuccessfulTxTime = 0;
 
 void setLoRaTxPower(uint8_t powerDbm) {
   if (powerDbm < 2)
@@ -62,20 +62,16 @@ void initNetwork() {
   attemptLoRaStart();
 }
 
-void handleNetworkCommands() {
-  // Simplex Broadcast Mode: No command listening to eliminate RF half-duplex collisions.
-}
-
 void sendTelemetry(
     float pitch, float roll,
     int16_t accelX, int16_t accelY, int16_t accelZ,
     int16_t gyroX, int16_t gyroY, int16_t gyroZ,
     uint16_t rch1, uint16_t rch2, uint16_t rch3, uint16_t rch5,
     float batteryVoltage, float alt,
-    bool rcSignalLost
+    bool rcSignalLost,
+    bool isCalibMode
 ) {
   static uint32_t packetCount = 0;
-  static unsigned long lastSuccessfulTxTime = 0;
 
   // If LoRa is not online, attempt non-blocking reconnect every 2 seconds
   if (!loraOnline) {
@@ -87,7 +83,7 @@ void sendTelemetry(
     return; // Don't block flight controller while LoRa is offline
   }
 
-  uint8_t flags = rcSignalLost ? 1 : 0;
+  uint8_t flags = (rcSignalLost ? 1 : 0) | (isCalibMode ? 2 : 0);
 
   MantaTelemetryPacket pkt;
   encode_telemetry_packet(&pkt, pitch, roll,
@@ -105,9 +101,9 @@ void sendTelemetry(
     packetCount++;
   } else {
     // If radio remains busy for > 200ms (stalled transmission), auto-recover
+    // NOTE: Do NOT reset lastSuccessfulTxTime here — only update it on real TX success (line above)
     if (lastSuccessfulTxTime > 0 && millis() - lastSuccessfulTxTime > 200) {
       attemptLoRaStart();
-      lastSuccessfulTxTime = millis();
     }
   }
 }
