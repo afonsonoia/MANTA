@@ -63,13 +63,20 @@ void initNetwork() {
 }
 
 void sendTelemetry(
+    uint32_t timestampMs,
     float pitch, float roll,
     int16_t accelX, int16_t accelY, int16_t accelZ,
     int16_t gyroX, int16_t gyroY, int16_t gyroZ,
     uint16_t rch1, uint16_t rch2, uint16_t rch3, uint16_t rch5,
+    uint16_t srvBR, uint16_t srvBL, uint16_t srvFR, uint16_t srvFL, uint16_t escThrot,
     float batteryVoltage, float alt,
     bool rcSignalLost,
-    bool isCalibMode
+    bool isAssistMode,
+    bool isLowVolt,
+    bool isEscActive,
+    uint8_t flightMode,
+    float pitchKp, float pitchKi, float pitchKd,
+    float rollKp, float rollKi, float rollKd
 ) {
   static uint32_t packetCount = 0;
 
@@ -83,15 +90,25 @@ void sendTelemetry(
     return; // Don't block flight controller while LoRa is offline
   }
 
-  uint8_t flags = (rcSignalLost ? 1 : 0) | (isCalibMode ? 2 : 0);
+  uint8_t flags = (rcSignalLost ? 0x01 : 0) |
+                  (isAssistMode ? 0x02 : 0) |
+                  (isLowVolt ? 0x04 : 0) |
+                  (isEscActive ? 0x08 : 0);
 
   MantaTelemetryPacket pkt;
-  encode_telemetry_packet(&pkt, pitch, roll,
+  encode_telemetry_packet(&pkt,
+                          (uint8_t)(packetCount & 0xFF),
+                          timestampMs,
+                          pitch, roll,
                           accelX, accelY, accelZ,
                           gyroX, gyroY, gyroZ,
                           rch1, rch2, rch3, rch5,
+                          srvBR, srvBL, srvFR, srvFL, escThrot,
                           batteryVoltage, alt,
-                          flags);
+                          flags,
+                          flightMode,
+                          pitchKp, pitchKi, pitchKd,
+                          rollKp, rollKi, rollKd);
 
   // beginPacket() returns 0 if radio is currently busy transmitting
   if (LoRa.beginPacket()) {

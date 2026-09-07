@@ -46,6 +46,8 @@ class TelemetryCSVLogger:
             header = [
                 "timestamp_iso",
                 "timestamp_epoch",
+                "timestamp_esp32_ms",
+                "pkt_seq",
                 "pitch_deg",
                 "roll_deg",
                 "raw_accel_x",
@@ -57,11 +59,29 @@ class TelemetryCSVLogger:
                 "ch1_roll_pwm",
                 "ch2_pitch_pwm",
                 "ch3_throttle_pwm",
-                "ch4_pwm",
                 "ch5_pwm",
+                "servo_br_pwm",
+                "servo_bl_pwm",
+                "servo_fr_pwm",
+                "servo_fl_pwm",
+                "esc_throttle_pwm",
                 "battery_v",
                 "alt_m",
-                "rc_signal_lost"
+                "lat",
+                "lon",
+                "gps_alt_m",
+                "satellites",
+                "gps_fix_type",
+                "rc_signal_lost",
+                "assist_mode_active",
+                "flight_mode",
+                "esc_active",
+                "pitch_kp",
+                "pitch_ki",
+                "pitch_kd",
+                "roll_kp",
+                "roll_ki",
+                "roll_kd"
             ]
             self.csv_writer.writerow(header)
             self.file_obj.flush()
@@ -87,16 +107,17 @@ class TelemetryCSVLogger:
         iso_ts = now.strftime("%Y-%m-%d %H:%M:%S.%f")
         epoch_ts = time.time()
 
-        rc = telemetry_dict.get("rc", [0, 0, 0, 0, 0])
+        rc = telemetry_dict.get("rc", [0, 0, 0, 0])
         ch1 = rc[0] if len(rc) > 0 else 0
         ch2 = rc[1] if len(rc) > 1 else 0
         ch3 = rc[2] if len(rc) > 2 else 0
-        ch4 = rc[3] if len(rc) > 3 else 0
-        ch5 = rc[4] if len(rc) > 4 else 0
+        ch5 = rc[3] if len(rc) > 3 else (rc[4] if len(rc) > 4 else 0)
 
         row = [
             iso_ts,
             f"{epoch_ts:.6f}",
+            telemetry_dict.get("timestamp_ms", 0),
+            telemetry_dict.get("pkt_seq", 0),
             telemetry_dict.get("pitch", 0.0),
             telemetry_dict.get("roll", 0.0),
             telemetry_dict.get("accel_x", 0),
@@ -108,11 +129,29 @@ class TelemetryCSVLogger:
             ch1,
             ch2,
             ch3,
-            ch4,
             ch5,
-            telemetry_dict.get("batteryVoltage", 0.0),
+            telemetry_dict.get("servo_br", 1500),
+            telemetry_dict.get("servo_bl", 1500),
+            telemetry_dict.get("servo_fr", 1500),
+            telemetry_dict.get("servo_fl", 1500),
+            telemetry_dict.get("esc_throttle", 1000),
+            telemetry_dict.get("batteryVoltage", telemetry_dict.get("battery_v", 0.0)),
             telemetry_dict.get("alt", 0.0),
-            1 if telemetry_dict.get("rcSignalLost", False) else 0
+            telemetry_dict.get("lat", telemetry_dict.get("latitude", 0.0)),
+            telemetry_dict.get("lon", telemetry_dict.get("longitude", 0.0)),
+            telemetry_dict.get("gps_alt", 0.0),
+            telemetry_dict.get("satellites", telemetry_dict.get("sats", 0)),
+            telemetry_dict.get("fix_type", telemetry_dict.get("fixType", 0)),
+            1 if telemetry_dict.get("rcSignalLost", False) else 0,
+            1 if telemetry_dict.get("isAssistMode", False) else 0,
+            telemetry_dict.get("flight_mode", telemetry_dict.get("flightMode", 1)),
+            1 if telemetry_dict.get("isEscActive", telemetry_dict.get("is_esc_active", False)) else 0,
+            telemetry_dict.get("pitch_kp", telemetry_dict.get("pitchKp", 9.35)),
+            telemetry_dict.get("pitch_ki", telemetry_dict.get("pitchKi", 5.00)),
+            telemetry_dict.get("pitch_kd", telemetry_dict.get("pitchKd", 0.623)),
+            telemetry_dict.get("roll_kp", telemetry_dict.get("rollKp", 15.00)),
+            telemetry_dict.get("roll_ki", telemetry_dict.get("rollKi", 5.00)),
+            telemetry_dict.get("roll_kd", telemetry_dict.get("rollKd", 1.500))
         ]
 
         try:

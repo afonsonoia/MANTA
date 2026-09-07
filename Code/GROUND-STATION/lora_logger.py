@@ -11,6 +11,7 @@ import openpyxl
 from openpyxl import Workbook
 import json
 from raw_lora_logger import AsyncRawLoRaLogger
+from telemetry_codec import decode_telemetry, PACKET_SIZE
 
 # Try importing matplotlib for embedded live plot
 HAS_MATPLOTLIB = False
@@ -231,7 +232,7 @@ class BatteryAnalyzerGUI:
         calib_card.pack(fill=tk.X, padx=20, pady=5)
 
         calib_title = tk.Label(
-            calib_card, text="Servo Control & Range Setup",
+            calib_card, text="Ground Station Telemetry & Flight Parameters Reference (Simplex RX)",
             font=("Segoe UI", 10, "bold"), bg=self.CARD_BG, fg=self.ACCENT_YELLOW
         )
         calib_title.grid(row=0, column=0, columnspan=8, sticky="w", pady=(0, 6))
@@ -314,7 +315,7 @@ class BatteryAnalyzerGUI:
         self.btn_toggle_power.grid(row=3, column=4, columnspan=2, sticky="w", padx=4, pady=4)
 
         btn_save_nvs = tk.Button(
-            calib_card, text="SAVE TO FLASH (NVS)", command=self.save_all_calibration_nvs,
+            calib_card, text="SAVE LOCAL SETTINGS", command=self.save_all_calibration_nvs,
             font=("Segoe UI", 9, "bold"), bg=self.ACCENT_GREEN, fg="#11111b",
             activebackground="#a6e3a1", bd=0, padx=10, pady=3, cursor="hand2"
         )
@@ -482,16 +483,13 @@ class BatteryAnalyzerGUI:
         self.lbl_status.config(text="Disconnected", fg=self.ACCENT_RED)
 
     def calibrate_neutral(self):
-        if self.is_connected and self.serial_conn and self.serial_conn.is_open:
-            try:
-                self.serial_conn.write(b"CALIB_TRIM\n")
-                self.serial_conn.flush()
-                self.async_raw_logger.log_packet("TX", "CALIB_TRIM")
-                messagebox.showinfo("Radio Neutral Calibration", "Neutral calibration command sent successfully!\nRollerons & Elevator centers saved to ESP32 MANTA Flash NVS.")
-            except Exception as e:
-                messagebox.showerror("Error", f"Failed to send calibration command: {e}")
-        else:
-            messagebox.showwarning("Warning", "Please connect serial port before calibrating!")
+        messagebox.showinfo(
+            "Radio Neutral & Trim Reference",
+            "Simplex Telemetry Link (Aircraft TX -> Ground Station RX).\n\n"
+            "Radio neutrals, rollerons, and elevator centers are configured directly in the aircraft firmware:\n"
+            "• File: Code/MANTA_ESP32/include/config.h (or control.cpp / receiver.cpp)\n"
+            "• Horizon zero-level display offsets can be calibrated in Mission Planner."
+        )
 
     def get_validated_alert_voltage(self):
         try:
@@ -511,213 +509,121 @@ class BatteryAnalyzerGUI:
     def toggle_lora_power(self):
         if self.last_lora_power == 14:
             new_power = 20
-            text_str = "LORA POWER: HIGH BOOST (20 dBm - 1km+ VLOS)"
+            text_str = "LORA POWER TARGET: 20 dBm (PA_BOOST)"
             bg_color = self.ACCENT_GREEN
         else:
             new_power = 14
-            text_str = "LORA POWER: STANDARD (14 dBm)"
+            text_str = "LORA POWER TARGET: 14 dBm"
             bg_color = self.ACCENT_CYAN
 
-        log_msg = f"Changed variable LORA_TX_POWER: [{self.last_lora_power} dBm] -> [{new_power} dBm]"
+        log_msg = f"Changed target LORA_TX_POWER: [{self.last_lora_power} dBm] -> [{new_power} dBm]"
         self.last_lora_power = new_power
         self.btn_toggle_power.config(text=text_str, bg=bg_color)
         self.async_raw_logger.log_packet("CONFIG", log_msg)
-
-        if self.is_connected and self.serial_conn and self.serial_conn.is_open:
-            try:
-                cmd = f"SET_LORA_POWER:{new_power}\n"
-                self.serial_conn.write(cmd.encode('utf-8'))
-                self.serial_conn.flush()
-                self.async_raw_logger.log_packet("TX", cmd.strip())
-                messagebox.showinfo("LoRa Power Updated", f"LoRa Transmit Power set to {new_power} dBm (+{new_power}dBm PA_BOOST for 1km+ VLOS mountain range)!")
-            except Exception as e:
-                messagebox.showerror("Error", f"Failed to send LoRa power command: {e}")
-        else:
-            messagebox.showinfo("Power Level Updated", f"LoRa Power target set to {new_power} dBm. Will transmit upon connecting.")
+        messagebox.showinfo(
+            "LoRa Power Setting",
+            f"Ground Station power profile display target set to {new_power} dBm.\n\n"
+            f"(Note: Aircraft RF hardware power is configured in MANTA firmware config.h via LORA_TX_POWER = {new_power})."
+        )
 
     def send_servo_inversion_live(self):
-        if self.is_connected and self.serial_conn and self.serial_conn.is_open:
-            try:
-                inv_br = 1 if self.var_inv_br.get() else 0
-                inv_bl = 1 if self.var_inv_bl.get() else 0
-                inv_fr = 1 if self.var_inv_fr.get() else 0
-                inv_fl = 1 if self.var_inv_fl.get() else 0
-                cmd = f"SET_SERVO_INV:{inv_br},{inv_bl},{inv_fr},{inv_fl}\n"
-                for _ in range(2):
-                    self.serial_conn.write(cmd.encode('utf-8'))
-                    self.serial_conn.flush()
-                    time.sleep(0.05)
-                self.async_raw_logger.log_packet("TX", cmd.strip())
-                print(f"[LoRa TX Live] {cmd.strip()}")
-            except Exception as e:
-                print(f"[LoRa TX Error] {e}")
+        # Simplex Telemetry link: Servos configured in aircraft firmware config.h
+        pass
 
     def send_servo_trim_live(self):
-        if self.is_connected and self.serial_conn and self.serial_conn.is_open:
-            try:
-                br_val = int(self.spin_br.get())
-                bl_val = int(self.spin_bl.get())
-                fr_val = int(self.spin_fr.get())
-                fl_val = int(self.spin_fl.get())
-                cmd = f"SET_SERVO_TRIM:{br_val},{bl_val},{fr_val},{fl_val}\n"
-                for _ in range(2):
-                    self.serial_conn.write(cmd.encode('utf-8'))
-                    self.serial_conn.flush()
-                    time.sleep(0.05)
-                self.async_raw_logger.log_packet("TX", cmd.strip())
-                print(f"[LoRa TX Live] {cmd.strip()}")
-            except Exception as e:
-                print(f"[LoRa TX Error] {e}")
+        # Simplex Telemetry link: Servo trims configured in aircraft firmware config.h
+        pass
 
     def send_deadband_live(self):
-        if self.is_connected and self.serial_conn and self.serial_conn.is_open:
-            try:
-                db_val = int(self.spin_deadband.get())
-                if db_val < 1: db_val = 1
-                if db_val > 50: db_val = 50
-                cmd = f"SET_DEADBAND:{db_val}\n"
-                for _ in range(2):
-                    self.serial_conn.write(cmd.encode('utf-8'))
-                    self.serial_conn.flush()
-                    time.sleep(0.05)
-                self.async_raw_logger.log_packet("TX", cmd.strip())
-                if os.path.exists(CALIB_FILE):
-                    try:
-                        with open(CALIB_FILE, 'r', encoding='utf-8') as f:
-                            c_dict = json.load(f)
-                    except Exception:
-                        c_dict = {}
-                    c_dict['deadband'] = db_val
-                    with open(CALIB_FILE, 'w', encoding='utf-8') as f:
-                        json.dump(c_dict, f, indent=2)
-                print(f"[LoRa TX Live] {cmd.strip()}")
-            except Exception as e:
-                print(f"[LoRa TX Error] {e}")
+        try:
+            db_val = int(self.spin_deadband.get())
+            if db_val < 1: db_val = 1
+            if db_val > 50: db_val = 50
+            if os.path.exists(CALIB_FILE):
+                try:
+                    with open(CALIB_FILE, 'r', encoding='utf-8') as f:
+                        c_dict = json.load(f)
+                except Exception:
+                    c_dict = {}
+                c_dict['deadband'] = db_val
+                with open(CALIB_FILE, 'w', encoding='utf-8') as f:
+                    json.dump(c_dict, f, indent=2)
+            self.last_deadband = db_val
+        except Exception:
+            pass
 
     def send_servo_angle_live(self):
-        if self.is_connected and self.serial_conn and self.serial_conn.is_open:
-            try:
-                angle_val = int(self.spin_angle.get())
-                if angle_val < 10: angle_val = 10
-                if angle_val > 45: angle_val = 45
-                cmd = f"SET_SERVO_ANGLE:{angle_val}\n"
-                for _ in range(2):
-                    self.serial_conn.write(cmd.encode('utf-8'))
-                    self.serial_conn.flush()
-                    time.sleep(0.05)
-                self.async_raw_logger.log_packet("TX", cmd.strip())
-                print(f"[LoRa TX Live] {cmd.strip()}")
-            except Exception as e:
-                print(f"[LoRa TX Error] {e}")
+        # Simplex Telemetry link: Max angle configured in aircraft firmware config.h
+        pass
 
     def send_servo_rate_live(self):
-        if self.is_connected and self.serial_conn and self.serial_conn.is_open:
-            try:
-                rate_val = int(self.spin_servo_rate.get())
-                if rate_val < 5: rate_val = 5
-                if rate_val > 100: rate_val = 100
-                cmd = f"SET_SERVO_INTERVAL:{rate_val}\n"
-                for _ in range(2):
-                    self.serial_conn.write(cmd.encode('utf-8'))
-                    self.serial_conn.flush()
-                    time.sleep(0.05)
-                self.async_raw_logger.log_packet("TX", cmd.strip())
-                print(f"[LoRa TX Live] {cmd.strip()}")
-            except Exception as e:
-                print(f"[LoRa TX Error] {e}")
+        # Simplex Telemetry link: Servo rate configured in aircraft firmware config.h
+        pass
 
     def send_cutoff_live(self):
-        if self.is_connected and self.serial_conn and self.serial_conn.is_open:
-            try:
-                alert_val = self.get_validated_alert_voltage()
-                cmd = f"CUTOFF:{alert_val:.2f}\n"
-                for _ in range(2):
-                    self.serial_conn.write(cmd.encode('utf-8'))
-                    self.serial_conn.flush()
-                    time.sleep(0.05)
-                self.async_raw_logger.log_packet("TX", cmd.strip())
-                print(f"[LoRa TX Live] {cmd.strip()}")
-            except Exception as e:
-                print(f"[LoRa TX Error] {e}")
+        try:
+            alert_val = self.get_validated_alert_voltage()
+            if os.path.exists(CALIB_FILE):
+                try:
+                    with open(CALIB_FILE, 'r', encoding='utf-8') as f:
+                        c_dict = json.load(f)
+                except Exception:
+                    c_dict = {}
+                c_dict['cutoff'] = round(alert_val, 2)
+                with open(CALIB_FILE, 'w', encoding='utf-8') as f:
+                    json.dump(c_dict, f, indent=2)
+        except Exception:
+            pass
 
     def save_all_calibration_nvs(self):
-        if not (self.is_connected and self.serial_conn and self.serial_conn.is_open):
-            messagebox.showwarning("Warning", "Please connect serial port before saving calibration!")
-            return
+        try:
+            deadband_val = int(self.spin_deadband.get())
+            if deadband_val < 1: deadband_val = 1
+            if deadband_val > 50: deadband_val = 50
+            alert_val = self.get_validated_alert_voltage()
 
-        def _worker():
-            try:
-                angle_val = int(self.spin_angle.get())
-                deadband_val = int(self.spin_deadband.get())
-                br_val = int(self.spin_br.get())
-                bl_val = int(self.spin_bl.get())
-                fr_val = int(self.spin_fr.get())
-                fl_val = int(self.spin_fl.get())
-                alert_val = self.get_validated_alert_voltage()
-                power_val = self.last_lora_power
-                rate_val = int(self.spin_servo_rate.get())
+            c_dict = {}
+            if os.path.exists(CALIB_FILE):
+                try:
+                    with open(CALIB_FILE, 'r', encoding='utf-8') as f:
+                        c_dict = json.load(f)
+                except Exception:
+                    c_dict = {}
 
-                inv_br = 1 if self.var_inv_br.get() else 0
-                inv_bl = 1 if self.var_inv_bl.get() else 0
-                inv_fr = 1 if self.var_inv_fr.get() else 0
-                inv_fl = 1 if self.var_inv_fl.get() else 0
+            c_dict['deadband'] = deadband_val
+            c_dict['cutoff'] = round(alert_val, 2)
+            with open(CALIB_FILE, 'w', encoding='utf-8') as f:
+                json.dump(c_dict, f, indent=2)
 
-                cmd_angle  = f"SET_SERVO_ANGLE:{angle_val}\n"
-                cmd_db     = f"SET_DEADBAND:{deadband_val}\n"
-                cmd_rate   = f"SET_SERVO_INTERVAL:{rate_val}\n"
-                cmd_pwr    = f"SET_LORA_POWER:{power_val}\n"
-                cmd_cutoff = f"CUTOFF:{alert_val:.2f}\n"
-                cmd_trim   = f"SET_SERVO_TRIM:{br_val},{bl_val},{fr_val},{fl_val}\n"
-                cmd_inv    = f"SET_SERVO_INV:{inv_br},{inv_bl},{inv_fr},{inv_fl}\n"
-                cmd_save   = "CALIB_SAVE\n"
-
-                cmds_list = [cmd_angle, cmd_db, cmd_rate, cmd_pwr, cmd_cutoff, cmd_trim, cmd_inv, cmd_save]
-
-                self.last_received_ack = None
-
-                for cmd in cmds_list:
-                    if self.serial_conn and self.serial_conn.is_open:
-                        self.serial_conn.write(cmd.encode('utf-8'))
-                        self.serial_conn.flush()
-                        time.sleep(0.06)
-                        self.async_raw_logger.log_packet("TX", cmd.strip())
-
-                # Wait up to 3.0 seconds for CALIB_SAVE ACK confirmation from MANTA over LoRa
-                ack_confirmed = False
-                wait_start = time.time()
-                while time.time() - wait_start < 3.0:
-                    if self.last_received_ack and "CALIB_SAVE" in self.last_received_ack:
-                        ack_confirmed = True
-                        break
-                    time.sleep(0.05)
-
-                if not ack_confirmed and self.last_received_ack is not None:
-                    ack_confirmed = True
-
-                if ack_confirmed:
-                    self.root.after(0, lambda: messagebox.showinfo("Calibration Saved", f"CONFIRMED: MANTA acknowledged ({self.last_received_ack}) and saved all parameters to Flash NVS!"))
-                else:
-                    self.root.after(0, lambda: messagebox.showwarning("ACK Timeout", "Commands transmitted to Ground Station, but no ACK confirmation was received back from MANTA over LoRa. Check radio link."))
-            except Exception as e:
-                self.root.after(0, lambda err=e: messagebox.showerror("Error", f"Failed to send calibration parameters: {err}"))
-
-        threading.Thread(target=_worker, daemon=True).start()
+            messagebox.showinfo(
+                "Local Settings Saved",
+                f"Ground Station local settings saved to imu_calibration.json:\n"
+                f"• Deadband Margin: {deadband_val} us\n"
+                f"• Battery Alert Cutoff: {alert_val:.2f} V\n\n"
+                f"Architecture Notice:\n"
+                f"The radio link is strictly Simplex Downlink (Aircraft TX -> Ground Station RX).\n"
+                f"Aircraft flight parameters (servo trims, inversions, and mixing) are configured in MANTA firmware (config.h)."
+            )
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to save local settings: {e}")
 
     def apply_rc_filter(self):
-        if not self.serial_conn or not self.is_connected:
-            messagebox.showwarning("Not Connected", "Please connect to Ground Station first.")
-            return
         try:
             val_str = self.combo_rc_filter_type.get()
             f_type = int(val_str.split(":")[0])
             w_size = int(self.entry_rc_win.get().strip())
             alpha = float(self.spin_rc_alpha.get())
-            alpha_int = int(round(alpha * 100))
-            cmd = f"SET_RC_FILTER:{f_type}:{w_size}:{alpha_int}\n"
-            self.serial_conn.write(cmd.encode('utf-8'))
-            self.serial_conn.flush()
             f_names = ["RAW", "SMA", "EMA", "WMA"]
-            messagebox.showinfo("RC Filter Config", f"Sent filter update to MANTA:\nType: {f_names[f_type]}\nWindow N: {w_size}\nAlpha: {alpha:.2f}")
+            messagebox.showinfo(
+                "RC Noise Filter Configuration",
+                f"Selected Filter Profile:\n"
+                f"• Type: {f_names[f_type]}\n"
+                f"• Window (N): {w_size}\n"
+                f"• Alpha: {alpha:.2f}\n\n"
+                f"Simplex Communication Notice:\n"
+                f"RC receiver noise filtering is executed inside the aircraft flight controller.\n"
+                f"Configure these values in Code/MANTA_ESP32/include/config.h."
+            )
         except Exception as e:
             messagebox.showerror("Filter Error", f"Invalid parameters: {e}")
 
@@ -820,6 +726,8 @@ class BatteryAnalyzerGUI:
                                 rec_v = decoded_pkt.get("batteryVoltage", 0.0)
                                 raw_adc = decoded_pkt.get("rawADC", 0.0)
                                 self._process_voltage_sample(rec_v, raw_adc)
+                                if "rc5" in decoded_pkt and decoded_pkt["rc5"] > 0:
+                                    self.last_manta_ch5 = decoded_pkt["rc5"]
                                 raw_bytes_buffer = raw_bytes_buffer[PACKET_SIZE:]
                             else:
                                 raw_bytes_buffer = raw_bytes_buffer[1:]

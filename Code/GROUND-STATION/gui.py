@@ -68,7 +68,7 @@ class SimpleGroundStationGUI:
         title_lbl.pack(anchor="w")
 
         subtitle_lbl = tk.Label(
-            header_frame, text="Preset Audio & RC Interference Filter Controller (Pin D22)",
+            header_frame, text="LoRa Simplex Downlink Receiver (433 MHz) & Local Buzzer Controller (Pin D22)",
             font=("Segoe UI", 9, "italic"), bg=self.BG_COLOR, fg=self.SUBTEXT_COLOR
         )
         subtitle_lbl.pack(anchor="w")
@@ -101,93 +101,81 @@ class SimpleGroundStationGUI:
         self.lbl_status = tk.Label(conn_card, text="Disconnected", font=("Segoe UI", 9, "bold"), bg=self.CARD_BG, fg=self.ACCENT_RED)
         self.lbl_status.grid(row=3, column=0, columnspan=3, pady=(4, 0))
 
-        # --- RC RECEIVER NOISE FILTER SETUP CARD ---
-        filter_card = tk.Frame(self.root, bg=self.CARD_BG, bd=0, relief="flat", padx=15, pady=10)
-        filter_card.pack(fill=tk.X, padx=20, pady=4)
+        # --- GROUND STATION LOCAL SETTINGS CARD (SIMPLEX DOWNLINK) ---
+        settings_card = tk.Frame(self.root, bg=self.CARD_BG, bd=0, relief="flat", padx=15, pady=10)
+        settings_card.pack(fill=tk.X, padx=20, pady=4)
 
-        tk.Label(filter_card, text="RC Receiver Interference Noise Filter", font=("Segoe UI", 10, "bold"), bg=self.CARD_BG, fg=self.ACCENT_CYAN).grid(row=0, column=0, columnspan=4, sticky="w", pady=(0, 6))
-
-        tk.Label(filter_card, text="Filter Type:", bg=self.CARD_BG, fg=self.TEXT_COLOR).grid(row=1, column=0, sticky="w")
-        self.combo_rc_filter = ttk.Combobox(filter_card, state="readonly", width=24, values=[
-            "0: Disabled (Raw)",
-            "1: Simple Moving Average (SMA)",
-            "2: Exponential Moving Average (EMA)",
-            "3: Weighted Moving Average (WMA)"
-        ])
-        self.combo_rc_filter.current(1)
-        self.combo_rc_filter.grid(row=1, column=1, columnspan=3, sticky="w", padx=4, pady=2)
-
-        tk.Label(filter_card, text="Window (N):", bg=self.CARD_BG, fg=self.TEXT_COLOR).grid(row=2, column=0, sticky="w", pady=4)
-        self.entry_rc_win = tk.Entry(filter_card, width=6, bg=self.LOG_BG, fg=self.TEXT_COLOR, insertbackground=self.TEXT_COLOR)
-        self.entry_rc_win.insert(0, "5")
-        self.entry_rc_win.grid(row=2, column=1, sticky="w", padx=4, pady=4)
-
-        tk.Label(filter_card, text="Alpha (EMA):", bg=self.CARD_BG, fg=self.TEXT_COLOR).grid(row=2, column=2, sticky="w", padx=(10, 2), pady=4)
-        self.spin_rc_alpha = tk.Spinbox(filter_card, from_=0.05, to=1.00, increment=0.05, width=5, bg=self.LOG_BG, fg=self.TEXT_COLOR, insertbackground=self.TEXT_COLOR)
-        self.spin_rc_alpha.delete(0, tk.END); self.spin_rc_alpha.insert(0, "0.33")
-        self.spin_rc_alpha.grid(row=2, column=3, sticky="w", padx=4, pady=4)
+        tk.Label(settings_card, text="Ground Station Local Alert Settings", font=("Segoe UI", 10, "bold"), bg=self.CARD_BG, fg=self.ACCENT_CYAN).grid(row=0, column=0, columnspan=4, sticky="w", pady=(0, 6))
 
         initial_db = 18
+        initial_cutoff = 12.50
         if os.path.exists(CALIB_FILE):
             try:
                 with open(CALIB_FILE, 'r', encoding='utf-8') as f:
                     c_data = json.load(f)
                     if 'deadband' in c_data:
                         initial_db = max(1, min(50, int(c_data['deadband'])))
+                    if 'cutoff' in c_data:
+                        initial_cutoff = float(c_data['cutoff'])
             except Exception:
                 pass
 
-        tk.Label(filter_card, text="Deadband (us):", bg=self.CARD_BG, fg=self.TEXT_COLOR).grid(row=3, column=0, sticky="w", pady=4)
-        self.spin_deadband = tk.Spinbox(filter_card, from_=1, to=50, width=5, bg=self.LOG_BG, fg=self.TEXT_COLOR, insertbackground=self.TEXT_COLOR)
+        tk.Label(settings_card, text="Deadband Margin (us):", bg=self.CARD_BG, fg=self.TEXT_COLOR).grid(row=1, column=0, sticky="w", pady=4)
+        self.spin_deadband = tk.Spinbox(settings_card, from_=1, to=50, width=6, bg=self.LOG_BG, fg=self.TEXT_COLOR, insertbackground=self.TEXT_COLOR)
         self.spin_deadband.delete(0, tk.END); self.spin_deadband.insert(0, str(initial_db))
-        self.spin_deadband.grid(row=3, column=1, sticky="w", padx=4, pady=4)
+        self.spin_deadband.grid(row=1, column=1, sticky="w", padx=4, pady=4)
 
-        self.btn_apply_deadband = tk.Button(
-            filter_card, text="SET DEADBAND", command=self.apply_deadband,
-            font=("Segoe UI", 8, "bold"), bg=self.ACCENT_CYAN, fg="#11111b",
-            activebackground="#89dceb", bd=0, padx=6, pady=2, cursor="hand2", state="disabled"
-        )
-        self.btn_apply_deadband.grid(row=3, column=2, columnspan=2, sticky="e", padx=4, pady=4)
+        tk.Label(settings_card, text="Battery Alert Cutoff (V):", bg=self.CARD_BG, fg=self.TEXT_COLOR).grid(row=1, column=2, sticky="w", padx=(10, 4), pady=4)
+        self.spin_cutoff = tk.Spinbox(settings_card, from_=10.0, to=16.8, increment=0.1, width=6, bg=self.LOG_BG, fg=self.TEXT_COLOR, insertbackground=self.TEXT_COLOR)
+        self.spin_cutoff.delete(0, tk.END); self.spin_cutoff.insert(0, f"{initial_cutoff:.2f}")
+        self.spin_cutoff.grid(row=1, column=3, sticky="w", padx=4, pady=4)
 
-        self.btn_apply_filter = tk.Button(
-            filter_card, text="APPLY RC FILTER SETTINGS", command=self.apply_rc_filter,
+        self.btn_save_settings = tk.Button(
+            settings_card, text="SAVE LOCAL SETTINGS", command=self.save_local_settings,
             font=("Segoe UI", 9, "bold"), bg=self.ACCENT_GREEN, fg="#11111b",
-            activebackground="#a6e3a1", bd=0, pady=4, cursor="hand2", state="disabled"
+            activebackground="#a6e3a1", bd=0, pady=4, cursor="hand2"
         )
-        self.btn_apply_filter.grid(row=4, column=0, columnspan=4, sticky="ew", pady=(6, 0))
+        self.btn_save_settings.grid(row=2, column=0, columnspan=4, sticky="ew", pady=(6, 2))
+
+        info_lbl = tk.Label(
+            settings_card,
+            text="Simplex Telemetry (Aircraft TX -> GS RX). Aircraft filters & trims are set in MANTA firmware.",
+            font=("Segoe UI", 7, "italic"), bg=self.CARD_BG, fg=self.SUBTEXT_COLOR
+        )
+        info_lbl.grid(row=3, column=0, columnspan=4, sticky="w", pady=(2, 0))
 
         # --- BUZZER CONTROL ACTIONS CARD ---
         ctrl_card = tk.Frame(self.root, bg=self.CARD_BG, bd=0, relief="flat", padx=15, pady=10)
         ctrl_card.pack(fill=tk.X, padx=20, pady=4)
 
-        tk.Label(ctrl_card, text="Buzzer Controls", font=("Segoe UI", 10, "bold"), bg=self.CARD_BG, fg=self.TEXT_COLOR).pack(anchor="w", pady=(0, 6))
+        tk.Label(ctrl_card, text="Ground Station Buzzer Controls (Pin D22)", font=("Segoe UI", 10, "bold"), bg=self.CARD_BG, fg=self.TEXT_COLOR).pack(anchor="w", pady=(0, 6))
 
         actions_frame = tk.Frame(ctrl_card, bg=self.CARD_BG)
         actions_frame.pack(fill=tk.X)
+
+        self.btn_short = tk.Button(
+            actions_frame, text="Short Beep (0.7s)", command=self.set_short,
+            font=("Segoe UI", 9, "bold"), bg="#45475a", fg=self.TEXT_COLOR, bd=0, pady=8, state="disabled", cursor="hand2"
+        )
+        self.btn_short.grid(row=0, column=0, padx=4, pady=2, sticky="nsew")
 
         self.btn_continuous = tk.Button(
             actions_frame, text="Continuous Beep", command=self.set_continuous,
             font=("Segoe UI", 9, "bold"), bg="#45475a", fg=self.TEXT_COLOR, bd=0, pady=8, state="disabled", cursor="hand2"
         )
-        self.btn_continuous.grid(row=0, column=0, padx=4, pady=2, sticky="nsew")
+        self.btn_continuous.grid(row=0, column=1, padx=4, pady=2, sticky="nsew")
 
         self.btn_intermittent = tk.Button(
             actions_frame, text="Intermittent Beep", command=self.set_intermittent,
             font=("Segoe UI", 9, "bold"), bg="#45475a", fg=self.TEXT_COLOR, bd=0, pady=8, state="disabled", cursor="hand2"
         )
-        self.btn_intermittent.grid(row=0, column=1, padx=4, pady=2, sticky="nsew")
+        self.btn_intermittent.grid(row=1, column=0, padx=4, pady=2, sticky="nsew")
 
         self.btn_off = tk.Button(
             actions_frame, text="Turn OFF", command=self.set_off,
             font=("Segoe UI", 9, "bold"), bg="#45475a", fg=self.TEXT_COLOR, bd=0, pady=8, state="disabled", cursor="hand2"
         )
-        self.btn_off.grid(row=1, column=0, columnspan=2, padx=4, pady=2, sticky="nsew")
-
-        self.btn_calib_trim = tk.Button(
-            actions_frame, text="Calibrate Radio Neutrals", command=self.calibrate_trim,
-            font=("Segoe UI", 9, "bold"), bg=self.ACCENT_YELLOW, fg="#11111b", bd=0, pady=8, state="disabled", cursor="hand2"
-        )
-        self.btn_calib_trim.grid(row=2, column=0, columnspan=2, padx=4, pady=2, sticky="nsew")
+        self.btn_off.grid(row=1, column=1, padx=4, pady=2, sticky="nsew")
 
         actions_frame.columnconfigure(0, weight=1)
         actions_frame.columnconfigure(1, weight=1)
@@ -266,46 +254,41 @@ class SimpleGroundStationGUI:
         self.log("[CONNECTION] Disconnected.")
 
     def _set_buttons_state(self, state):
-        for btn in [self.btn_continuous, self.btn_intermittent, self.btn_off, self.btn_calib_trim, self.btn_apply_filter, self.btn_apply_deadband]:
+        for btn in [self.btn_short, self.btn_continuous, self.btn_intermittent, self.btn_off]:
             btn.config(state=state)
 
-    def apply_deadband(self):
+    def save_local_settings(self):
         try:
             db_val = int(self.spin_deadband.get().strip())
             if db_val < 1: db_val = 1
             if db_val > 50: db_val = 50
-            cmd = f"SET_DEADBAND:{db_val}"
-            self.send_cmd(cmd)
+            cutoff_val = float(self.spin_cutoff.get().strip())
+            if cutoff_val < 10.0: cutoff_val = 10.0
+            if cutoff_val > 16.8: cutoff_val = 16.8
+
+            c_dict = {}
             if os.path.exists(CALIB_FILE):
                 try:
                     with open(CALIB_FILE, 'r', encoding='utf-8') as f:
                         c_dict = json.load(f)
                 except Exception:
                     c_dict = {}
-                c_dict['deadband'] = db_val
-                with open(CALIB_FILE, 'w', encoding='utf-8') as f:
-                    json.dump(c_dict, f, indent=2)
-            messagebox.showinfo("Deadband Config", f"Sent Deadband update to MANTA: {db_val} us (saved to config)")
-        except Exception as e:
-            messagebox.showerror("Deadband Error", f"Invalid deadband value: {e}")
 
-    def calibrate_trim(self):
-        self.send_cmd("CALIB_TRIM")
-        messagebox.showinfo("Calibration", "CALIB_TRIM command sent to ESP32 MANTA!")
+            c_dict['deadband'] = db_val
+            c_dict['cutoff'] = round(cutoff_val, 2)
+            with open(CALIB_FILE, 'w', encoding='utf-8') as f:
+                json.dump(c_dict, f, indent=2)
 
-    def apply_rc_filter(self):
-        try:
-            val_str = self.combo_rc_filter.get()
-            f_type = int(val_str.split(":")[0])
-            w_size = int(self.entry_rc_win.get().strip())
-            alpha = float(self.spin_rc_alpha.get())
-            alpha_int = int(round(alpha * 100))
-            cmd = f"SET_RC_FILTER:{f_type}:{w_size}:{alpha_int}"
-            self.send_cmd(cmd)
-            f_names = ["RAW", "SMA", "EMA", "WMA"]
-            messagebox.showinfo("RC Filter Config", f"Sent filter update to MANTA:\nType: {f_names[f_type]}\nWindow N: {w_size}\nAlpha: {alpha:.2f}")
+            self.log(f"[CONFIG] Local settings saved: Deadband={db_val} us, Cutoff={cutoff_val:.2f} V")
+            messagebox.showinfo(
+                "Local Settings Saved",
+                f"Ground Station settings saved to imu_calibration.json:\n"
+                f"• Deadband Margin: {db_val} us\n"
+                f"• Battery Cutoff Alarm: {cutoff_val:.2f} V\n\n"
+                f"(Simplex Telemetry: Aircraft filters and mixing are set in MANTA firmware config.h)"
+            )
         except Exception as e:
-            messagebox.showerror("Filter Config Error", f"Invalid parameters: {e}")
+            messagebox.showerror("Settings Error", f"Invalid settings value: {e}")
 
     def send_cmd(self, cmd_str):
         if self.is_connected and self.serial_conn and self.serial_conn.is_open:
@@ -315,23 +298,28 @@ class SimpleGroundStationGUI:
             except Exception as e:
                 self.log(f"[ERROR] Failed to send: {e}")
 
+    def set_short(self):
+        self.current_mode = "SHORT"
+        self.send_cmd("BEEP:SHORT")
+        self._update_active_button(self.btn_short, self.ACCENT_CYAN)
+
     def set_continuous(self):
         self.current_mode = "CONTINUOUS"
-        self.send_cmd("CONTINUOUS")
+        self.send_cmd("BEEP:CONTINUOUS")
         self._update_active_button(self.btn_continuous, self.ACCENT_GREEN)
 
     def set_intermittent(self):
         self.current_mode = "INTERMITTENT"
-        self.send_cmd("INTERMITTENT")
+        self.send_cmd("BEEP:INTERMITTENT")
         self._update_active_button(self.btn_intermittent, self.ACCENT_YELLOW)
 
     def set_off(self):
         self.current_mode = "OFF"
-        self.send_cmd("OFF")
+        self.send_cmd("BEEP:OFF")
         self._update_active_button(self.btn_off)
 
     def _update_active_button(self, active_btn, active_color="#585b70"):
-        for btn in [self.btn_continuous, self.btn_intermittent, self.btn_off]:
+        for btn in [self.btn_short, self.btn_continuous, self.btn_intermittent, self.btn_off]:
             if btn == active_btn:
                 btn.config(bg=active_color, fg="#11111b" if active_color != "#585b70" else self.TEXT_COLOR)
             else:

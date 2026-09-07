@@ -7,6 +7,7 @@ void initBatterySensor();
 float readInstantaneousRawADC();
 void sampleBatteryUniformly();
 float getAndResetAverageADC();
+float getLatestBatteryVoltage();
 float calculateBatteryVoltage(float rawInput);
 void setCutoffThreshold(float targetVoltage);
 float getEffectiveCutoffThreshold();
@@ -14,3 +15,4 @@ bool isLowVoltageCutoffTriggered();
 bool checkLowVoltageSafety(float currentVoltage);
 
 #endif // BATTERY_H
+

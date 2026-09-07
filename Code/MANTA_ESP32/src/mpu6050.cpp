@@ -24,9 +24,9 @@ static float q0 = 1.0f, q1 = 0.0f, q2 = 0.0f, q3 = 0.0f;
 // Integral error accumulator for online gyro bias compensation
 static float eIntX = 0.0f, eIntY = 0.0f, eIntZ = 0.0f;
 
-static float currentPitch = 0.0f;
-static float currentRoll = 0.0f;
-static float currentYaw = 0.0f;
+static volatile float currentPitch = 0.0f;
+static volatile float currentRoll = 0.0f;
+static volatile float currentYaw = 0.0f;
 
 // Calibrated Gyro Static Offsets (in raw LSB)
 static float gyroBiasX = 0.0f;
@@ -34,7 +34,7 @@ static float gyroBiasY = 0.0f;
 static float gyroBiasZ = 0.0f;
 
 static unsigned long lastSampleTimeUs = 0;
-static bool mpuInitialized = false;
+static volatile bool mpuInitialized = false;
 static bool initialAttitudeSet = false;
 
 static int16_t lastRawAx = 0, lastRawAy = 0, lastRawAz = 0;
@@ -342,14 +342,6 @@ void getFilteredMPUData(float &pitch, float &roll, float &yaw) {
   yaw = currentYaw;
 }
 
-void getFilteredMPUQuaternion(float &outQ0, float &outQ1, float &outQ2,
-                              float &outQ3) {
-  outQ0 = q0;
-  outQ1 = q1;
-  outQ2 = q2;
-  outQ3 = q3;
-}
-
 bool isMPU6050Available() { return mpuInitialized; }
 
 void getRawMPUData(int16_t &ax, int16_t &ay, int16_t &az, int16_t &gx,
@@ -357,12 +349,6 @@ void getRawMPUData(int16_t &ax, int16_t &ay, int16_t &az, int16_t &gx,
   ax = lastRawAx;
   ay = lastRawAy;
   az = lastRawAz;
-  gx = lastRawGx;
-  gy = lastRawGy;
-  gz = lastRawGz;
-}
-
-void getRawGyroData(int16_t &gx, int16_t &gy, int16_t &gz) {
   gx = lastRawGx;
   gy = lastRawGy;
   gz = lastRawGz;

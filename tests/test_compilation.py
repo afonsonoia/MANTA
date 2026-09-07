@@ -45,3 +45,13 @@ def test_ground_station_esp32_firmware_compilation():
         f"Ground Station ESP32 firmware compilation failed with exit code {result.returncode}:\n"
         f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
     )
+
+
+def test_ground_station_bytecode_compilation():
+    """Verifies all Ground Station Python files compile to valid bytecode with ast.parse and compile()."""
+    for py_file in get_ground_station_py_files():
+        with open(py_file, 'r', encoding='utf-8') as f:
+            source = f.read()
+        code_obj = compile(source, py_file, 'exec')
+        assert code_obj is not None
+

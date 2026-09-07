@@ -1,47 +1,51 @@
 #include "battery.h"
 #include "config.h"
 
-static bool lowVoltageCutoffTriggered = false;
-static double accumulatedAdcSum = 0.0;
-static long sampleCount = 0;
+static volatile bool lowVoltageCutoffTriggered = false;
+static float latestRawAdc = 0.0f;
+static float latestBatteryVoltage = 0.0f;
 static float configuredCutoffVoltage = DEFAULT_CUTOFF_VOLTAGE;
+static uint8_t lowVoltConsecutiveHits = 0;
 
 void initBatterySensor() {
   pinMode(PIN_BATTERY, INPUT);
   analogReadResolution(12);
   analogSetPinAttenuation(PIN_BATTERY, ADC_11db);
-  accumulatedAdcSum = 0.0;
-  sampleCount = 0;
+  // Perform initial measurement on startup
+  sampleBatteryUniformly();
+
+  // Auto-detect LiPo cell count on boot: > 13.0V is 4S, <= 13.0V is 3S
+  if (latestBatteryVoltage > 13.0f) {
+    configuredCutoffVoltage = CUTOFF_VOLTAGE_4S;
+  } else if (latestBatteryVoltage > 6.0f) {
+    configuredCutoffVoltage = CUTOFF_VOLTAGE_3S;
+  }
 }
 
 float readInstantaneousRawADC() {
   long sum = 0;
-  for (int i = 0; i < ADC_OVERSAMPLE_PER_TICK; i++) {
+  for (int i = 0; i < 64; i++) {
     sum += analogRead(PIN_BATTERY);
-    delayMicroseconds(50);
+    delayMicroseconds(100);
   }
-  return (float)sum / (float)ADC_OVERSAMPLE_PER_TICK;
+  return (float)sum / 64.0f;
 }
 
 void sampleBatteryUniformly() {
   float raw = readInstantaneousRawADC();
-  accumulatedAdcSum += raw;
-  sampleCount++;
-
-  // Continuous low-voltage protection check on every sample tick
-  float currentVoltage = calculateBatteryVoltage(raw);
-  checkLowVoltageSafety(currentVoltage);
+  latestRawAdc = raw;
+  latestBatteryVoltage = calculateBatteryVoltage(raw);
+  checkLowVoltageSafety(latestBatteryVoltage);
 }
 
 float getAndResetAverageADC() {
-  if (sampleCount == 0) {
-    return readInstantaneousRawADC();
-  }
-  float avg = (float)(accumulatedAdcSum / (double)sampleCount);
-  accumulatedAdcSum = 0.0;
-  sampleCount = 0;
-  return avg;
+  return latestRawAdc;
 }
+
+float getLatestBatteryVoltage() {
+  return latestBatteryVoltage;
+}
+
 
 float calculateBatteryVoltage(float rawInput) {
   float voltage =
@@ -69,12 +73,16 @@ bool isLowVoltageCutoffTriggered() { return lowVoltageCutoffTriggered; }
 
 bool checkLowVoltageSafety(float currentVoltage) {
   float effectiveCutoff = getEffectiveCutoffThreshold();
-  if (currentVoltage <= effectiveCutoff && currentVoltage > 0.0f) {
-    if (!lowVoltageCutoffTriggered) {
+  if (currentVoltage <= effectiveCutoff && currentVoltage > 6.0f) {
+    if (lowVoltConsecutiveHits < LOW_VOLT_CONFIRM_COUNT) {
+      lowVoltConsecutiveHits++;
+    }
+    if (lowVoltConsecutiveHits >= LOW_VOLT_CONFIRM_COUNT) {
       lowVoltageCutoffTriggered = true;
     }
   } else if (currentVoltage > (effectiveCutoff + 0.5f)) {
-    // Voltage recovered (e.g. fresh battery connected): reset cutoff trigger
+    // Voltage recovered (e.g. throttle eased or fresh battery connected): reset cutoff trigger
+    lowVoltConsecutiveHits = 0;
     lowVoltageCutoffTriggered = false;
   }
   return lowVoltageCutoffTriggered;

@@ -37,18 +37,14 @@ void loop() {
   if (currentMillis - lastSampleMillis >= SAMPLE_INTERVAL_MS) {
     lastSampleMillis = currentMillis;
     sampleMPU6050Uniformly();
-
-    // Instant safety evaluation on every sample tick
-    if (isLowVoltageCutoffTriggered()) {
-      emergencyCutoffESC();
-    }
   }
 
-  // Sample Battery Voltage every 1000ms (1 Hz) on independent non-blocking timer
-  if (currentMillis - lastBatterySampleMillis >= 1000) {
+  // Sample Battery Voltage every 5000ms (0.2 Hz) matching original calibration sketch
+  if (currentMillis - lastBatterySampleMillis >= BATTERY_SAMPLE_INTERVAL_MS) {
     lastBatterySampleMillis = currentMillis;
     sampleBatteryUniformly();
   }
+
 
   // Sample BMP280 barometer every 1000ms (1 Hz) on independent timer
   if (currentMillis - lastBaroSampleMillis >= 1000) {
@@ -60,8 +56,8 @@ void loop() {
   if (currentMillis - lastLoggingMillis >= LOGGING_INTERVAL_MS) {
     lastLoggingMillis = currentMillis;
 
-    float avgADC = getAndResetAverageADC();
-    float batteryVoltage = calculateBatteryVoltage(avgADC);
+    float batteryVoltage = getLatestBatteryVoltage();
+
 
     float pitch = 0.0f, roll = 0.0f;
     getFilteredMPUData(pitch, roll);
@@ -79,7 +75,32 @@ void loop() {
 
     bool rcLost = isRCSignalLost();
 
-    sendTelemetry(pitch, roll, accelX, accelY, accelZ, gyroX, gyroY, gyroZ, rch1, rch2, rch3, rch5, batteryVoltage, baroAlt, rcLost, false);
+    // Actual servo deflections and ESC throttle from control system
+    int srvBR = 1500, srvBL = 1500, srvFR = 1500, srvFL = 1500, escThrot = 1000;
+    FlightMode fMode = FLIGHT_MODE_1;
+    bool rollActive = false;
+    getActuatorOutputs(srvBR, srvBL, srvFR, srvFL, escThrot, fMode, rollActive);
+
+    bool isLowVolt = isLowVoltageCutoffTriggered();
+    bool isEscActive = isExtremumSeekingActive();
+
+    float pKp = 0.0f, pKi = 0.0f, pKd = 0.0f;
+    float rKp = 0.0f, rKi = 0.0f, rKd = 0.0f;
+    getActivePIDGains(pKp, pKi, pKd, rKp, rKi, rKd);
+
+    sendTelemetry(
+        currentMillis,
+        pitch, roll,
+        accelX, accelY, accelZ,
+        gyroX, gyroY, gyroZ,
+        rch1, rch2, rch3, rch5,
+        (uint16_t)srvBR, (uint16_t)srvBL, (uint16_t)srvFR, (uint16_t)srvFL, (uint16_t)escThrot,
+        batteryVoltage, baroAlt,
+        rcLost, rollActive, isLowVolt,
+        isEscActive, (uint8_t)fMode,
+        pKp, pKi, pKd,
+        rKp, rKi, rKd
+    );
   }
 
   // 3. Heartbeat LED pulse (500ms in Flight Mode)

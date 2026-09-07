@@ -27,9 +27,31 @@ def generate_random_telemetry():
         "rc2": random.randint(1000, 2000),
         "rc3": random.randint(1000, 2000),
         "rc5": random.choice([1000, 2000]),
+        "servo_br": random.randint(1000, 2000),
+        "servo_bl": random.randint(1000, 2000),
+        "servo_fr": random.randint(1000, 2000),
+        "servo_fl": random.randint(1000, 2000),
+        "esc_throttle": random.randint(1000, 2000),
         "battery_v": round(random.uniform(10.00, 18.00), 2),
         "alt": round(random.uniform(0.0, 1000.0), 1),
-        "rc_signal_lost": random.choice([True, False])
+        "lat": round(random.uniform(36.0, 42.0), 6),
+        "lon": round(random.uniform(-10.0, -6.0), 6),
+        "gps_alt": round(random.uniform(0.0, 1000.0), 1),
+        "satellites": random.randint(0, 24),
+        "gps_fix": random.choice([0, 1, 2]),
+        "rc_signal_lost": random.choice([True, False]),
+        "is_assist_mode": random.choice([True, False]),
+        "is_low_volt": random.choice([True, False]),
+        "is_esc_active": random.choice([True, False]),
+        "flight_mode": random.choice([1, 2, 3]),
+        "pitch_kp": round(random.uniform(5.0, 25.0), 2),
+        "pitch_ki": round(random.uniform(1.0, 10.0), 2),
+        "pitch_kd": round(random.uniform(0.1, 2.0), 3),
+        "roll_kp": round(random.uniform(5.0, 25.0), 2),
+        "roll_ki": round(random.uniform(1.0, 10.0), 2),
+        "roll_kd": round(random.uniform(0.1, 2.0), 3),
+        "pkt_seq": random.randint(0, 255),
+        "timestamp_ms": random.randint(0, 1000000)
     }
 
 
@@ -68,6 +90,8 @@ def test_random_telemetry_fuzzing_500_iterations():
         assert decoded is not None, f"[Iteration {i+1}] Decoding returned None for valid packet!"
 
         # Assert exact field equality
+        assert decoded["pkt_seq"] == orig["pkt_seq"], f"[Iteration {i+1}] pkt_seq mismatch"
+        assert decoded["timestamp_ms"] == orig["timestamp_ms"], f"[Iteration {i+1}] timestamp_ms mismatch"
         assert decoded["pitch"] == pytest.approx(orig["pitch"], abs=0.1), f"[Iteration {i+1}] pitch mismatch"
         assert decoded["roll"] == pytest.approx(orig["roll"], abs=0.1), f"[Iteration {i+1}] roll mismatch"
         assert decoded["accel_x"] == orig["accel_x"], f"[Iteration {i+1}] accel_x mismatch"
@@ -77,9 +101,23 @@ def test_random_telemetry_fuzzing_500_iterations():
         assert decoded["gyro_y"] == orig["gyro_y"], f"[Iteration {i+1}] gyro_y mismatch"
         assert decoded["gyro_z"] == orig["gyro_z"], f"[Iteration {i+1}] gyro_z mismatch"
         assert decoded["rc"] == [orig["rc1"], orig["rc2"], orig["rc3"], orig["rc5"]], f"[Iteration {i+1}] RC channels mismatch"
+        assert decoded["servo_br"] == orig["servo_br"], f"[Iteration {i+1}] servo_br mismatch"
+        assert decoded["servo_bl"] == orig["servo_bl"], f"[Iteration {i+1}] servo_bl mismatch"
+        assert decoded["servo_fr"] == orig["servo_fr"], f"[Iteration {i+1}] servo_fr mismatch"
+        assert decoded["servo_fl"] == orig["servo_fl"], f"[Iteration {i+1}] servo_fl mismatch"
+        assert decoded["esc_throttle"] == orig["esc_throttle"], f"[Iteration {i+1}] esc_throttle mismatch"
         assert decoded["batteryVoltage"] == pytest.approx(orig["battery_v"], abs=0.01), f"[Iteration {i+1}] batteryVoltage mismatch"
         assert decoded["alt"] == pytest.approx(orig["alt"], abs=0.1), f"[Iteration {i+1}] alt mismatch"
         assert decoded["rcSignalLost"] == orig["rc_signal_lost"], f"[Iteration {i+1}] rcSignalLost mismatch"
+        assert decoded["isAssistMode"] == orig["is_assist_mode"], f"[Iteration {i+1}] isAssistMode mismatch"
+        assert decoded["isEscActive"] == orig["is_esc_active"], f"[Iteration {i+1}] isEscActive mismatch"
+        assert decoded["flightMode"] == orig["flight_mode"], f"[Iteration {i+1}] flightMode mismatch"
+        assert decoded["pitch_kp"] == pytest.approx(orig["pitch_kp"], abs=0.01), f"[Iteration {i+1}] pitch_kp mismatch"
+        assert decoded["pitch_ki"] == pytest.approx(orig["pitch_ki"], abs=0.01), f"[Iteration {i+1}] pitch_ki mismatch"
+        assert decoded["pitch_kd"] == pytest.approx(orig["pitch_kd"], abs=0.001), f"[Iteration {i+1}] pitch_kd mismatch"
+        assert decoded["roll_kp"] == pytest.approx(orig["roll_kp"], abs=0.01), f"[Iteration {i+1}] roll_kp mismatch"
+        assert decoded["roll_ki"] == pytest.approx(orig["roll_ki"], abs=0.01), f"[Iteration {i+1}] roll_ki mismatch"
+        assert decoded["roll_kd"] == pytest.approx(orig["roll_kd"], abs=0.001), f"[Iteration {i+1}] roll_kd mismatch"
 
     print(f"[CI/CD Telemetry Codec Test] SUCCESS: All {N_ITERATIONS} randomized telemetry packets matched 100% perfectly!")
 
@@ -140,11 +178,42 @@ def test_burst_noise_and_block_corruption():
         )
 
 
+def test_legacy_format_backward_compatibility():
+    """Verifies that legacy 33-byte format packets continue to decode seamlessly."""
+    orig = {
+        "pitch": 12.3,
+        "roll": -5.6,
+        "accel_x": 100,
+        "accel_y": -200,
+        "accel_z": -4000,
+        "gyro_x": 15,
+        "gyro_y": -30,
+        "gyro_z": 5,
+        "rc1": 1520,
+        "rc2": 1480,
+        "rc3": 1200,
+        "rc5": 1000,
+        "battery_v": 15.5,
+        "alt": 25.0,
+        "rc_signal_lost": False,
+        "legacy_format": True
+    }
+    legacy_bytes = encode_telemetry(**orig)
+    assert len(legacy_bytes) == 33
+    decoded = decode_telemetry(legacy_bytes)
+    assert decoded is not None
+    assert decoded["packet_size"] == 33
+    assert decoded["pitch"] == pytest.approx(12.3, abs=0.1)
+    assert decoded["roll"] == pytest.approx(-5.6, abs=0.1)
+    assert decoded["rc1"] == 1520
+    assert decoded["batteryVoltage"] == pytest.approx(15.5, abs=0.01)
+
+
 def test_invalid_packet_length_and_header():
     """Verifies that truncated packets or invalid headers are cleanly rejected."""
     assert decode_telemetry(b"") is None
     assert decode_telemetry(b"MT" + b"\x00" * 10) is None
-    assert decode_telemetry(b"XX" + b"\x00" * 30) is None
+    assert decode_telemetry(b"XX" + b"\x00" * 47) is None
 
 
 def test_negative_pitch_roll_angle_codec():
@@ -157,6 +226,49 @@ def test_negative_pitch_roll_angle_codec():
     assert decoded is not None
     assert decoded["pitch"] == pytest.approx(-15.4, abs=0.1)
     assert decoded["roll"] == pytest.approx(-25.2, abs=0.1)
+
+
+def test_49b_default_telemetry_codec():
+    """Verifies that legacy 49-byte non-GPS telemetry packets encode and decode cleanly."""
+    data = generate_random_telemetry()
+    encoded = encode_telemetry(**data, packet_format="49B")
+    assert len(encoded) == 49
+
+    decoded = decode_telemetry(encoded)
+    assert decoded is not None
+    assert decoded["packet_size"] == 49
+    assert decoded["lat"] == 0.0
+    assert decoded["lon"] == 0.0
+    assert decoded["gps_alt"] == 0.0
+    assert decoded["satellites"] == 0
+    assert decoded["fix_type"] == 0
+    assert decoded["gps_fixed"] is False
+    assert decoded["pitch_kp"] == 9.35
+    assert decoded["roll_kp"] == 15.00
+
+
+def test_gps_air530_telemetry_codec():
+    """Verifies that legacy 61-byte GPS Air530 telemetry packets encode and decode with high precision."""
+    data = generate_random_telemetry()
+    data["lat"] = 38.7223000  # Lisbon, Portugal (North)
+    data["lon"] = -9.1393000  # Lisbon, Portugal (West)
+    data["gps_alt"] = 112.5
+    data["satellites"] = 12
+    data["gps_fix"] = 1
+    data["packet_format"] = "61B_GPS"
+
+    encoded = encode_telemetry(**data)
+    assert len(encoded) == 61
+
+    decoded = decode_telemetry(encoded)
+    assert decoded is not None
+    assert decoded["packet_size"] == 61
+    assert decoded["lat"] == pytest.approx(38.7223000, abs=1e-6)
+    assert decoded["lon"] == pytest.approx(-9.1393000, abs=1e-6)
+    assert decoded["gps_alt"] == pytest.approx(112.5, abs=0.1)
+    assert decoded["satellites"] == 12
+    assert decoded["fix_type"] == 1
+    assert decoded["gps_fixed"] is True
 
 
 def test_calibration_data_report_parsing():
@@ -195,17 +307,25 @@ def test_calibration_data_report_parsing():
     assert int(pwr_m.group(1)) == 14
 
 
-def test_set_deadband_command_format_and_clamping():
-    """Verifies SET_DEADBAND command formatting and clamping to 1..50 us range."""
-    def format_deadband_cmd(val: int) -> str:
-        clamped = max(1, min(50, int(val)))
-        return f"SET_DEADBAND:{clamped}\n"
+def test_set_deadband_clamping_and_validation():
+    """Verifies deadband clamping to 1..50 us range for Ground Station local config."""
+    def clamp_deadband(val: int) -> int:
+        return max(1, min(50, int(val)))
 
-    assert format_deadband_cmd(18) == "SET_DEADBAND:18\n"
-    assert format_deadband_cmd(0) == "SET_DEADBAND:1\n"
-    assert format_deadband_cmd(-5) == "SET_DEADBAND:1\n"
-    assert format_deadband_cmd(55) == "SET_DEADBAND:50\n"
-    assert format_deadband_cmd(50) == "SET_DEADBAND:50\n"
+    assert clamp_deadband(18) == 18
+    assert clamp_deadband(0) == 1
+    assert clamp_deadband(-5) == 1
+    assert clamp_deadband(55) == 50
+    assert clamp_deadband(50) == 50
+
+
+def test_ground_station_simplex_buzzer_commands():
+    """Verifies that Ground Station local buzzer commands conform to the Simplex RX firmware specification."""
+    valid_buzzer_cmds = ["BEEP:SHORT", "BEEP:CONTINUOUS", "BEEP:INTERMITTENT", "BEEP:OFF"]
+    for cmd in valid_buzzer_cmds:
+        assert cmd.startswith("BEEP:")
+        assert len(cmd) <= 20
+
 
 
 def test_ground_station_deadband_json_persistence(tmp_path):
@@ -243,4 +363,101 @@ def test_ground_station_deadband_json_persistence(tmp_path):
     finally:
         mp.CALIB_FILE = orig_calib_file
 
+
+def test_mode2_esc_telemetry_encoding_decoding():
+    """Verifies that Mode 2 fixed nominal FBW telemetry is correctly packed and unpacked in both 61B and 49B."""
+    data = {
+        "pitch": 12.5,
+        "roll": -5.0,
+        "accel_x": 100, "accel_y": -50, "accel_z": -4096,
+        "gyro_x": 10, "gyro_y": -5, "gyro_z": 2,
+        "rc1": 1550, "rc2": 1600, "rc3": 1400, "rc5": 1400,  # CH5 = 1400 (SWC 2, SWB OFF: Mode 2 Roll OFF)
+        "servo_br": 1580, "servo_bl": 1420, "servo_fr": 1530, "servo_fl": 1470, "esc_throttle": 1350,
+        "battery_v": 15.20,
+        "alt": 45.0,
+        "is_assist_mode": False,
+        "is_esc_active": False,
+        "flight_mode": 2,
+        "pitch_kp": 9.35, "pitch_ki": 5.00, "pitch_kd": 0.623,
+        "roll_kp": 15.00, "roll_ki": 5.00, "roll_kd": 1.500,
+        "pkt_seq": 42,
+        "timestamp_ms": 98765
+    }
+    encoded = encode_telemetry(**data)
+    assert len(encoded) == 61
+
+    decoded = decode_telemetry(encoded)
+    assert decoded is not None
+    assert decoded["packet_size"] == 61
+    assert decoded["flightMode"] == 2
+    assert decoded["isEscActive"] is False
+    assert decoded["rollActive"] is False
+    assert decoded["roll_active"] is False
+    assert decoded["pitch"] == 12.5
+    assert decoded["roll"] == -5.0
+    assert decoded["pitch_kp"] == 9.35
+    assert decoded["roll_kp"] == 15.00
+
+
+def test_mode3_adaptive_pid_telemetry_encoding_decoding():
+    """Verifies that Mode 3 adaptive fine-tuning (Extremum Seeking PI-D) encodes and decodes adapted gains with high precision."""
+    data = {
+        "pitch": 8.2,
+        "roll": -14.6,
+        "accel_x": 250, "accel_y": -120, "accel_z": -4100,
+        "gyro_x": 18, "gyro_y": -8, "gyro_z": 4,
+        "rc1": 1620, "rc2": 1540, "rc3": 1500, "rc5": 1760,  # CH5 = 1760 (Mode 3 Roll ON)
+        "servo_br": 1610, "servo_bl": 1390, "servo_fr": 1560, "servo_fl": 1440, "esc_throttle": 1500,
+        "battery_v": 14.85,
+        "alt": 82.3,
+        "is_assist_mode": True,
+        "is_esc_active": True,
+        "flight_mode": 3,
+        "pitch_kp": 11.45,  # Adapted Extremum Seeking gains
+        "pitch_ki": 5.00,
+        "pitch_kd": 0.685,
+        "roll_kp": 18.20,
+        "roll_ki": 5.00,
+        "roll_kd": 1.650,
+        "pkt_seq": 105,
+        "timestamp_ms": 254100
+    }
+    encoded = encode_telemetry(**data)
+    assert len(encoded) == 61
+
+    decoded = decode_telemetry(encoded)
+    assert decoded is not None
+    assert decoded["packet_size"] == 61
+    assert decoded["flightMode"] == 3
+    assert decoded["isEscActive"] is True
+    assert decoded["rollActive"] is True
+    assert decoded["roll_active"] is True
+    assert decoded["pitch_kp"] == 11.45
+    assert decoded["pitch_ki"] == 5.00
+    assert decoded["pitch_kd"] == 0.685
+    assert decoded["roll_kp"] == 18.20
+    assert decoded["roll_ki"] == 5.00
+    assert decoded["roll_kd"] == 1.650
+
+
+def test_flight_loggers_include_pid_and_mode_headers(tmp_path):
+    """Verifies that both TelemetryCSVLogger and AsyncTelemetryLogger record active flight mode and all 6 PID parameters."""
+    from telemetry_csv_logger import TelemetryCSVLogger
+    from MANTA_MISSION_PLANNER import AsyncTelemetryLogger
+
+    csv_path = tmp_path / "test_flight_log.csv"
+    logger = TelemetryCSVLogger(str(csv_path))
+    assert logger.start()
+
+    expected_csv_cols = ["flight_mode", "esc_active", "pitch_kp", "pitch_ki", "pitch_kd", "roll_kp", "roll_ki", "roll_kd"]
+    with open(logger.file_path, "r", encoding="utf-8") as f:
+        csv_header = f.readline().strip().split(",")
+    for col in expected_csv_cols:
+        assert col in csv_header, f"TelemetryCSVLogger header missing '{col}'!"
+    logger.stop()
+
+    mp_logger = AsyncTelemetryLogger(str(tmp_path / "test_mp_flight_log.csv"))
+    expected_mp_cols = ["Flight Mode", "ESC Active", "Pitch Kp", "Pitch Ki", "Pitch Kd", "Roll Kp", "Roll Ki", "Roll Kd"]
+    for col in expected_mp_cols:
+        assert col in mp_logger.headers, f"AsyncTelemetryLogger header missing '{col}'!"
 

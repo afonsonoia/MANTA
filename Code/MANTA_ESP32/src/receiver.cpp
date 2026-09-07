@@ -27,15 +27,6 @@ bool isRCSignalLost() {
   return (micros() - lastRcPulseMicros > 600000); // Failsafe: > 600ms without RC pulse
 }
 
-bool isRCQuietPeriod() {
-  if (isRCSignalLost() || lastRcPulseMicros == 0) return true;
-  return (micros() - lastRcPulseMicros >= 2500);
-}
-
-uint16_t getNoiseFloorUs() {
-  return 10;
-}
-
 static inline void processChannelSample(uint8_t index, uint32_t dt) {
   // Valid RC PWM pulse range (850–2150us)
   if (dt < 850 || dt > 2150) return;
@@ -138,23 +129,6 @@ void initReceiver() {
   attachInterrupt(digitalPinToInterrupt(PIN_RC_CH5), isrCH5, CHANGE);
 }
 
-void getReceiverChannels(uint16_t &ch1, uint16_t &ch2, uint16_t &ch3) {
-  noInterrupts();
-  uint16_t v1 = savedChannelVector[0];
-  uint16_t v2 = savedChannelVector[1];
-  uint16_t v3 = savedChannelVector[2];
-  interrupts();
-
-  if (isRCSignalLost()) {
-    ch1 = 0; ch2 = 0; ch3 = 0;
-    return;
-  }
-
-  ch1 = (v1 > 0) ? constrain(v1, 1000, 2000) : 0;
-  ch2 = (v2 > 0) ? constrain(v2, 1000, 2000) : 0;
-  ch3 = (v3 > 0) ? constrain(v3, 1000, 2000) : 0;
-}
-
 void getReceiverChannels(uint16_t &ch1, uint16_t &ch2, uint16_t &ch3, uint16_t &ch5) {
   noInterrupts();
   uint16_t v1 = savedChannelVector[0];
@@ -193,8 +167,4 @@ void getReceiverChannels(uint16_t &ch1, uint16_t &ch2, uint16_t &ch3, uint16_t &
   ch3 = (v3 > 0) ? constrain(v3, 1000, 2000) : 0;
   ch4 = (v4 > 0) ? constrain(v4, 1000, 2000) : 0;
   ch5 = (v5 > 0) ? constrain(v5, 1000, 2000) : 0;
-}
-
-void getRawReceiverChannels(uint16_t &ch1, uint16_t &ch2, uint16_t &ch3, uint16_t &ch4, uint16_t &ch5) {
-  getReceiverChannels(ch1, ch2, ch3, ch4, ch5);
 }
