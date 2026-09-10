@@ -19,7 +19,7 @@ try:
 except ImportError:
     HAS_PYMAVLINK = False
 
-from telemetry_codec import decode_telemetry, encode_telemetry, decode_ch5_mode, PACKET_SIZE, SUPPORTED_PACKET_SIZES
+from telemetry_codec import decode_telemetry, encode_telemetry, decode_ch5_mode, PACKET_SIZE, SUPPORTED_PACKET_SIZES, SUPPORTED_PACKET_SIZES_DESC
 
 # Config
 DEFAULT_BAUD = 115200
@@ -166,7 +166,7 @@ class AsyncTelemetryLogger:
             "Gyro X (LSB)", "Gyro Y (LSB)", "Gyro Z (LSB)",
             "RC1 Roll (us)", "RC2 Pitch (us)", "RC3 Throttle (us)", "RC5 Mode (us)",
             "Servo BR (us)", "Servo BL (us)", "Servo FR (us)", "Servo FL (us)", "ESC Throttle (us)",
-            "Battery Voltage (V)", "Altitude (m)", "RC Signal Lost", "Assist Active",
+            "Battery Voltage (V)", "Altitude (m)", "RC Signal Lost", "Flaperons Active",
             "Latitude", "Longitude", "Satellites", "Fix Type", "RSSI (dBm)", "SNR (dB)",
             "Flight Mode", "ESC Active",
             "Pitch Kp", "Pitch Ki", "Pitch Kd",
@@ -426,9 +426,9 @@ def run_bridge(port_name=None, launch_mp=True):
     filtered_climb_rate = 0.0
     estimated_airspeed = 0.0
     latest_flight_mode = 1
-    latest_roll_active = False
+    latest_flaperon_active = False
     last_notified_mode = None
-    last_notified_roll_active = None
+    last_notified_flaperon_active = None
 
     print("\n[Telemetria Ativa - Simplex Downlink] A receber pacotes LoRa da MANTA... (Pressione Ctrl+C para sair)\n")
 
@@ -447,12 +447,7 @@ def run_bridge(port_name=None, launch_mp=True):
 
                     # Extract binary telemetry packets (Magic header: 'MT' -> 0x4D, 0x54)
                     while len(raw_bytes_buffer) >= min(SUPPORTED_PACKET_SIZES):
-                        header_idx = -1
-                        for i in range(len(raw_bytes_buffer) - 1):
-                            if raw_bytes_buffer[i] == 0x4D and raw_bytes_buffer[i+1] == 0x54:
-                                header_idx = i
-                                break
-                        
+                        header_idx = raw_bytes_buffer.find(b'MT')
                         if header_idx == -1:
                             if len(raw_bytes_buffer) > 0 and raw_bytes_buffer[-1] == 0x4D:
                                 raw_bytes_buffer = raw_bytes_buffer[-1:]
@@ -465,7 +460,7 @@ def run_bridge(port_name=None, launch_mp=True):
                         # Try candidate sizes starting from longest supported packet down
                         decoded_pkt = None
                         matched_size = 0
-                        for cand_size in sorted(SUPPORTED_PACKET_SIZES, reverse=True):
+                        for cand_size in SUPPORTED_PACKET_SIZES_DESC:
                             if len(raw_bytes_buffer) >= cand_size:
                                 candidate = bytes(raw_bytes_buffer[:cand_size])
                                 res = decode_telemetry(candidate)
@@ -503,27 +498,27 @@ def run_bridge(port_name=None, launch_mp=True):
 
                             latest_flight_mode = decoded_pkt.get("flight_mode", decoded_pkt.get("flightMode", 1))
                             rc_signal_lost = decoded_pkt.get("rcSignalLost", decoded_pkt.get("rc_signal_lost", False))
-                            is_assist_active = decoded_pkt.get("isAssistMode", decoded_pkt.get("roll_active", False))
-                            latest_roll_active = is_assist_active
+                            is_flaperon_active = decoded_pkt.get("flaperon_active", decoded_pkt.get("flaperonActive", decoded_pkt.get("isAssistMode", False)))
+                            latest_flaperon_active = is_flaperon_active
 
                             # Detect flight mode transition and display confirmation notice
                             if not rc_signal_lost:
                                 if last_notified_mode is None:
                                     last_notified_mode = latest_flight_mode
-                                    last_notified_roll_active = latest_roll_active
-                                elif (latest_flight_mode != last_notified_mode or latest_roll_active != last_notified_roll_active):
+                                    last_notified_flaperon_active = latest_flaperon_active
+                                elif (latest_flight_mode != last_notified_mode or latest_flaperon_active != last_notified_flaperon_active):
                                     if latest_flight_mode == 1:
-                                        m_tag = "M1:MAN" if not latest_roll_active else "M1:ASSIST"
+                                        m_tag = "M1:MAN" if not latest_flaperon_active else "M1:FLAP"
                                     elif latest_flight_mode == 2:
-                                        m_tag = "M2:FBW" if not latest_roll_active else "M2+Roll:FBW"
+                                        m_tag = "M2:FBW" if not latest_flaperon_active else "M2:FLAP"
                                     elif latest_flight_mode == 3:
-                                        m_tag = "M3:ESC" if not latest_roll_active else "M3+Roll:ESC"
+                                        m_tag = "M3:ESC"
                                     else:
-                                        m_tag = f"M{latest_flight_mode}"
+                                        m_tag = f"M{latest_flight_mode}" + ("+FLAP" if latest_flaperon_active else "")
                                     sys.stdout.write(f"\n[PILOTO - MODO ALTERADO] -> {m_tag} (Feedback Sonoro 0.7s ativo)\n")
                                     sys.stdout.flush()
                                     last_notified_mode = latest_flight_mode
-                                    last_notified_roll_active = latest_roll_active
+                                    last_notified_flaperon_active = latest_flaperon_active
 
                             now = time.time()
                             elapsed_sec = round(now - start_time, 2)
@@ -554,7 +549,7 @@ def run_bridge(port_name=None, launch_mp=True):
                                     latest_estimated_voltage,
                                     latest_alt,
                                     1 if rc_signal_lost else 0,
-                                    1 if is_assist_active else 0,
+                                    1 if is_flaperon_active else 0,
                                     latest_lat,
                                     latest_lon,
                                     latest_satellites,
@@ -631,6 +626,10 @@ def run_bridge(port_name=None, launch_mp=True):
 
             # Dynamic flight speed estimation (Mission Planner requires airspeed > 3 m/s to count Time in Air)
             estimated_airspeed = max(5.0, (throttle_pct / 100.0) * 18.0)
+
+            # Accumulate flight time when throttle is active (> 5%)
+            if throttle_pct > 5:
+                cumulative_flight_time += dt_flight
 
             # Climb rate from barometric altitude derivative (low-pass filtered)
             dt_alt = now_time - last_alt_time
@@ -822,18 +821,18 @@ def run_bridge(port_name=None, launch_mp=True):
                 # Flight mode display: prefer confirmed telemetry from aircraft with fallback to RC5
                 if latest_flight_mode in (1, 2, 3):
                     mode_num = latest_flight_mode
-                    roll_on = latest_roll_active
+                    flaperons_on = latest_flaperon_active
                 else:
-                    mode_num, roll_on, _ = decode_ch5_mode(latest_rc[4])
+                    mode_num, flaperons_on, _ = decode_ch5_mode(latest_rc[4])
 
                 if mode_num == 1:
-                    mode_tag = "M1:MAN" if not roll_on else "M1:ASSIST"
+                    mode_tag = "M1:MAN" if not flaperons_on else "M1:FLAP"
                 elif mode_num == 2:
-                    mode_tag = "M2:FBW" if not roll_on else "M2+Roll:FBW"
+                    mode_tag = "M2:FBW" if not flaperons_on else "M2:FLAP"
                 elif mode_num == 3:
-                    mode_tag = "M3:ESC" if not roll_on else "M3+Roll:ESC"
+                    mode_tag = "M3:ESC"
                 else:
-                    mode_tag = f"M{mode_num}" + ("+Roll" if roll_on else "")
+                    mode_tag = f"M{mode_num}" + ("+FLAP" if flaperons_on else "")
 
                 climb_display = f"{filtered_climb_rate:+4.1f}m/s"
                 sys.stdout.write(f"\r[MANTA] Modo: {mode_tag:<11} | Voo: {flt_min:02d}:{flt_sec:02d} | Bat: {latest_estimated_voltage:.2f}V ({batt_pct}%) | Alt: {latest_alt:+5.1f}m ({climb_display}) | LoRa: {rssi_display} / {snr_display}   ")

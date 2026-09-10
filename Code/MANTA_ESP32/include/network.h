@@ -13,7 +13,7 @@ void sendTelemetry(
     uint16_t srvBR, uint16_t srvBL, uint16_t srvFR, uint16_t srvFL, uint16_t escThrot,
     float batteryVoltage, float alt,
     bool rcSignalLost,
-    bool isAssistMode,
+    bool flaperonActive,
     bool isLowVolt,
     bool isEscActive = false,
     uint8_t flightMode = 1,

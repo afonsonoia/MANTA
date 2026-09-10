@@ -78,8 +78,8 @@ void loop() {
     // Actual servo deflections and ESC throttle from control system
     int srvBR = 1500, srvBL = 1500, srvFR = 1500, srvFL = 1500, escThrot = 1000;
     FlightMode fMode = FLIGHT_MODE_1;
-    bool rollActive = false;
-    getActuatorOutputs(srvBR, srvBL, srvFR, srvFL, escThrot, fMode, rollActive);
+    bool flaperonActive = false;
+    getActuatorOutputs(srvBR, srvBL, srvFR, srvFL, escThrot, fMode, flaperonActive);
 
     bool isLowVolt = isLowVoltageCutoffTriggered();
     bool isEscActive = isExtremumSeekingActive();
@@ -96,7 +96,7 @@ void loop() {
         rch1, rch2, rch3, rch5,
         (uint16_t)srvBR, (uint16_t)srvBL, (uint16_t)srvFR, (uint16_t)srvFL, (uint16_t)escThrot,
         batteryVoltage, baroAlt,
-        rcLost, rollActive, isLowVolt,
+        rcLost, flaperonActive, isLowVolt,
         isEscActive, (uint8_t)fMode,
         pKp, pKi, pKd,
         rKp, rKi, rKd

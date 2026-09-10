@@ -23,7 +23,7 @@ static unsigned long beepUntil = 0;
 // Flight mode tracking for audio feedback
 static bool hasInitialMode = false;
 static uint8_t lastFlightMode = 0;
-static bool lastRollActive = false;
+static bool lastFlaperonActive = false;
 
 #define BUZZER_PWM_CHANNEL 0
 #define BUZZER_PWM_RESOLUTION 8
@@ -159,7 +159,7 @@ void loop() {
             Serial.write(localBuf, localLen);
             Serial.printf(" RSSI:%d SNR:%.1f\n", localRssi, localSnr);
 
-            // Flight mode change detection & audible feedback (1s short beep)
+            // Flight mode change detection & audible feedback (700ms beep on mode or flaperon toggle)
             if (localLen == (int)sizeof(MantaTelemetryPacket)) {
                 const MantaTelemetryPacket *pkt = (const MantaTelemetryPacket *)localBuf;
                 uint16_t expectedCrc = calculate_telemetry_crc16(localBuf, offsetof(MantaTelemetryPacket, crc16));
@@ -167,15 +167,15 @@ void loop() {
                     bool rcLost = (pkt->flags & 0x01) != 0;
                     if (!rcLost) {
                         uint8_t mode = pkt->flight_mode;
-                        bool rollActive = (pkt->flags & 0x02) != 0;
+                        bool flaperonActive = (pkt->flags & 0x02) != 0;
                         if (!hasInitialMode) {
                             lastFlightMode = mode;
-                            lastRollActive = rollActive;
+                            lastFlaperonActive = flaperonActive;
                             hasInitialMode = true;
-                        } else if (mode != lastFlightMode || rollActive != lastRollActive) {
+                        } else if (mode != lastFlightMode || flaperonActive != lastFlaperonActive) {
                             triggerBuzzer(MODE_CHANGE_BEEP_MS);
                             lastFlightMode = mode;
-                            lastRollActive = rollActive;
+                            lastFlaperonActive = flaperonActive;
                         }
                     }
                 }
@@ -188,18 +188,18 @@ void loop() {
                     if (!rcLost) {
                         uint16_t ch5 = (uint16_t)localBuf[29] | ((uint16_t)localBuf[30] << 8);
                         uint8_t mode = 1;
-                        bool rollActive = (flags & 0x02) != 0;
+                        bool flaperonActive = (flags & 0x02) != 0;
                         if (ch5 >= 1345 && ch5 < 1610) mode = 2;
                         else if (ch5 >= 1610) mode = 3;
 
                         if (!hasInitialMode) {
                             lastFlightMode = mode;
-                            lastRollActive = rollActive;
+                            lastFlaperonActive = flaperonActive;
                             hasInitialMode = true;
-                        } else if (mode != lastFlightMode || rollActive != lastRollActive) {
+                        } else if (mode != lastFlightMode || flaperonActive != lastFlaperonActive) {
                             triggerBuzzer(MODE_CHANGE_BEEP_MS);
                             lastFlightMode = mode;
-                            lastRollActive = rollActive;
+                            lastFlaperonActive = flaperonActive;
                         }
                     }
                 }

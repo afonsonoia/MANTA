@@ -43,7 +43,7 @@ static inline int mapRangeLinear(int val, int inMin, int inMax, int outMin,
 // Maps full stick range (1000-2000us) smoothly across [-maxPulseLimitUs, +maxPulseLimitUs]
 // with reduced sensitivity near the stick center for fine corrections.
 static inline int applyExpoAndScale(int rawStickUs, int centerUs, int maxPulseLimitUs, float expoFactor) {
-  float norm = constrain((float)(rawStickUs - centerUs) / 500.0f, -1.0f, 1.0f);
+  float norm = constrain((float)(rawStickUs - centerUs) * 0.002f, -1.0f, 1.0f);
   float shaped = (1.0f - expoFactor) * norm + expoFactor * (norm * norm * norm);
   return (int)(shaped * (float)maxPulseLimitUs);
 }
@@ -51,26 +51,30 @@ static inline int applyExpoAndScale(int rawStickUs, int centerUs, int maxPulseLi
 static constexpr uint16_t centerCH1 = 1500;
 static constexpr uint16_t centerCH2 = 1500;
 static constexpr uint8_t servoMaxAngleDeg =
-    DEFAULT_SERVO_MAX_ANGLE_DEG; // Default 20 deg
+    DEFAULT_SERVO_MAX_ANGLE_DEG; // Default 25 deg
 
 // ── CALIBRAÇÃO ESTÁTICA DE SUPERFÍCIES DE CONTROLO (TRIM OFFSETS) ───────────
 // Fator de conversão: ~11.11us por grau (1000us / 90 deg)
-constexpr float TRIM_DEG_BR = 0.0f;
+// Elevadores (BR e BL) com trim de +2.0 deg UP (Cabrar) no neutro para compensar tendência de descer o nariz
+constexpr float TRIM_DEG_BR =
+    -2.0f; // -2.0 deg (Subtrai 22us -> Neutro: 1478 us, elevador BR para cima)
 constexpr float TRIM_DEG_BL =
-    -10.0f; // -10.0 deg (Soma 111us -> Neutro: 1611 us)
+    -12.0f; // -12.0 deg (Soma 133us -> Neutro: 1633 us, elevador BL para cima invertido)
 constexpr float TRIM_DEG_FR = 0.0f;
 constexpr float TRIM_DEG_FL =
-    4.0f; // +4.0 deg UP (Adiciona 44us: rolleron esquerdo para cima)
+    4.0f; // +4.0 deg UP (Trim mecânico de encaixe do servo na superfície de controlo: define neutro físico plano em 1544 us)
 
-constexpr int TRIM_US_BR = (int)(TRIM_DEG_BR * US_PER_DEGREE); // 0 us
+constexpr int TRIM_US_BR =
+    (int)(TRIM_DEG_BR * US_PER_DEGREE + (TRIM_DEG_BR >= 0 ? 0.5f : -0.5f)); // -22 us -> Neutro: 1478 us
 constexpr int TRIM_US_BL =
-    -(int)(TRIM_DEG_BL * US_PER_DEGREE + (TRIM_DEG_BL >= 0 ? 0.5f : -0.5f)); // +111 us -> Neutro: 1611 us
-constexpr int TRIM_US_FR = (int)(TRIM_DEG_FR * US_PER_DEGREE); // 0 us
+    -(int)(TRIM_DEG_BL * US_PER_DEGREE + (TRIM_DEG_BL >= 0 ? 0.5f : -0.5f)); // +133 us -> Neutro: 1633 us
+constexpr int TRIM_US_FR = (int)(TRIM_DEG_FR * US_PER_DEGREE); // 0 us -> Neutro: 1500 us
 constexpr int TRIM_US_FL =
-    +(int)(TRIM_DEG_FL * US_PER_DEGREE + (TRIM_DEG_FL >= 0 ? 0.5f : -0.5f)); // +44 us -> Neutro: 1544 us
+    +(int)(TRIM_DEG_FL * US_PER_DEGREE + (TRIM_DEG_FL >= 0 ? 0.5f : -0.5f)); // +44 us -> Neutro mecânico: 1544 us
 
 static volatile FlightMode currentFlightMode = FLIGHT_MODE_1;
-static volatile bool currentRollActive = false;
+static volatile bool currentFlaperonActive = false;
+static volatile bool currentRollActive = true; // Roll control is permanently enabled
 static volatile bool currentAssistModeActive = false;
 
 // Fly-By-Wire PI-D State Variables
@@ -134,10 +138,10 @@ void getFBWTargets(float &targetPitch, float &targetRoll) {
   targetRoll = currentTargetRoll;
 }
 
-// Active in-flight PID gains (Pitch PID is completely deactivated for anti-stall safety; Roll remains active)
-static volatile float currentActivePitchKp = 0.0f;
-static volatile float currentActivePitchKi = 0.0f;
-static volatile float currentActivePitchKd = 0.0f;
+// Active in-flight PID gains
+static volatile float currentActivePitchKp = PID_PITCH_KP;
+static volatile float currentActivePitchKi = PID_PITCH_KI;
+static volatile float currentActivePitchKd = PID_PITCH_KD;
 static volatile float currentActiveRollKp = PID_ROLL_KP;
 static volatile float currentActiveRollKi = PID_ROLL_KI;
 static volatile float currentActiveRollKd = PID_ROLL_KD;
@@ -154,60 +158,61 @@ void getActivePIDGains(float &pitchKp, float &pitchKi, float &pitchKd,
 
 // Quasi-linear Expo utility for attitude angles in degrees
 static inline float applyExpoAndScaleDeg(int rawStickUs, int centerUs, float maxDeg, float expoFactor) {
-  float norm = constrain((float)(rawStickUs - centerUs) / 500.0f, -1.0f, 1.0f);
+  float norm = constrain((float)(rawStickUs - centerUs) * 0.002f, -1.0f, 1.0f);
   float shaped = (1.0f - expoFactor) * norm + expoFactor * (norm * norm * norm);
   return shaped * maxDeg;
 }
 
-void decodeCH5(uint16_t ch5Pulse, FlightMode &mode, bool &rollActive) {
-  // SWC (3-pos switch) + SWB (2-pos switch) calibrado:
-  // SWC 1 + SWB OFF: ~1076 us -> Modo 1 + Roll OFF (100% Manual Direto)
-  // SWC 1 + SWB ON:  ~1288 us -> Modo 1 + Roll ON  (Manual + Roll Assist)
-  // SWC 2 + SWB OFF: ~1400 us -> Modo 2 + Roll OFF (ESC Pitch FBW + Roll Manual)
-  // SWC 2 + SWB ON:  ~1530 us -> Modo 2 + Roll ON  (ESC PI-D Completo Pitch & Roll)
-  // SWC 3 + SWB OFF: ~1693 us -> Modo 3 + Roll OFF (FBW Fixo Pitch + Roll Manual)
-  // SWC 3 + SWB ON:  ~1760 us -> Modo 3 + Roll ON  (FBW Fixo Completo Pitch & Roll)
-  if (ch5Pulse < 1180) {
+void decodeCH5(uint16_t ch5Pulse, FlightMode &mode, bool &flaperonActive) {
+  // SWC (3-pos switch) + SWB (2-pos switch) calibrado do transmissor:
+  // SWC 1 + SWB OFF: ~1166 us -> Modo 1 + Flaperons OFF (Pitch Manual + Roll Assist)
+  // SWC 2 + SWB OFF: ~1328 us -> Modo 2 + Flaperons OFF (FBW Fixo Pitch & Roll)
+  // SWC 3 + SWB OFF: ~1411 us -> Modo 3 + Flaperons OFF (FBW Adaptativo ESC Pitch & Roll)
+  // SWC 1 + SWB ON:  ~1541 us -> Modo 1 + Flaperons ON  (Pitch Manual + Roll Assist + Flaps 15 deg DOWN)
+  // SWC 2 + SWB ON:  ~1825 us -> Modo 2 + Flaperons ON  (FBW Fixo Pitch & Roll + Flaps 15 deg DOWN)
+  // SWC 3 + SWB ON:  ~1942 us -> Modo 2 Auto Flap-Safe + Flaperons ON (Safety: Modo 3 demoted to 2)
+  if (ch5Pulse < 1247) {
     mode = FLIGHT_MODE_1;
-    rollActive = false;
-  } else if (ch5Pulse < 1345) {
-    mode = FLIGHT_MODE_1;
-    rollActive = true;
-  } else if (ch5Pulse < 1465) {
+    flaperonActive = false;
+  } else if (ch5Pulse < 1370) {
     mode = FLIGHT_MODE_2;
-    rollActive = false;
-  } else if (ch5Pulse < 1610) {
-    mode = FLIGHT_MODE_2;
-    rollActive = true;
-  } else if (ch5Pulse < 1725) {
+    flaperonActive = false;
+  } else if (ch5Pulse < 1476) {
     mode = FLIGHT_MODE_3;
-    rollActive = false;
+    flaperonActive = false;
+  } else if (ch5Pulse < 1683) {
+    mode = FLIGHT_MODE_1;
+    flaperonActive = true;
+  } else if (ch5Pulse < 1884) {
+    mode = FLIGHT_MODE_2;
+    flaperonActive = true;
   } else {
-    mode = FLIGHT_MODE_3;
-    rollActive = true;
+    // Mode 3 is prohibited when Flaperons is ON to prevent corrupting adaptive learning.
+    // Automatically demotes to Mode 2.
+    mode = FLIGHT_MODE_2;
+    flaperonActive = true;
   }
 }
 
-void decodeCH5WithHysteresis(uint16_t ch5Pulse, FlightMode currentMode, bool currentRoll, FlightMode &outMode, bool &outRoll) {
+void decodeCH5WithHysteresis(uint16_t ch5Pulse, FlightMode currentMode, bool currentFlaperon, FlightMode &outMode, bool &outFlaperon) {
   // Rejeita pulsos fora do range válido de RC (ruído de EMI extremo ou canal desconectado)
   if (ch5Pulse < 850 || ch5Pulse > 2150) {
     outMode = currentMode;
-    outRoll = currentRoll;
+    outFlaperon = currentFlaperon;
     return;
   }
 
   // Mapeia estado atual: 0 a 5
-  // Map current active state:
   // 0: Modo 1 OFF (~1166 us), 1: Modo 2 OFF (~1328 us)
   // 2: Modo 3 OFF (~1411 us), 3: Modo 1 ON (~1541 us)
   // 4: Modo 2 ON (~1825 us),  5: Modo 3 ON (~1942 us)
   uint8_t curState = 0;
   if (currentMode == FLIGHT_MODE_1) {
-    curState = currentRoll ? 3 : 0;
+    curState = currentFlaperon ? 3 : 0;
   } else if (currentMode == FLIGHT_MODE_2) {
-    curState = currentRoll ? 4 : 1;
+    curState = currentFlaperon ? 4 : 1;
   } else {
-    curState = currentRoll ? 5 : 2;
+    curState = currentFlaperon ? 5 : 2;
   }
 
   uint8_t nextState = curState;
@@ -234,12 +239,32 @@ void decodeCH5WithHysteresis(uint16_t ch5Pulse, FlightMode currentMode, bool cur
   }
 
   switch (nextState) {
-    case 0: outMode = FLIGHT_MODE_1; outRoll = false; break;
-    case 1: outMode = FLIGHT_MODE_2; outRoll = false; break;
-    case 2: outMode = FLIGHT_MODE_3; outRoll = false; break;
-    case 3: outMode = FLIGHT_MODE_1; outRoll = true;  break;
-    case 4: outMode = FLIGHT_MODE_2; outRoll = true;  break;
-    case 5: default: outMode = FLIGHT_MODE_3; outRoll = true;  break;
+    case 0:
+      outMode = FLIGHT_MODE_1;
+      outFlaperon = false;
+      break;
+    case 1:
+      outMode = FLIGHT_MODE_2;
+      outFlaperon = false;
+      break;
+    case 2:
+      outMode = FLIGHT_MODE_3;
+      outFlaperon = false;
+      break;
+    case 3:
+      outMode = FLIGHT_MODE_1;
+      outFlaperon = true;
+      break;
+    case 4:
+      outMode = FLIGHT_MODE_2;
+      outFlaperon = true;
+      break;
+    case 5:
+    default:
+      // USER RULE: Se flaperons estiver ligado, Modo 3 não pode estar ativo -> Auto-demote to Mode 2!
+      outMode = FLIGHT_MODE_2;
+      outFlaperon = true;
+      break;
   }
 }
 
@@ -251,23 +276,27 @@ bool isRollActive() {
   return currentRollActive;
 }
 
-void getActuatorOutputs(int &br, int &bl, int &fr, int &fl, int &throttle, bool &assistActive) {
+bool isFlaperonActive() {
+  return currentFlaperonActive;
+}
+
+void getActuatorOutputs(int &br, int &bl, int &fr, int &fl, int &throttle, bool &flaperonActive) {
   br = lastWritePulseUs[0];
   bl = lastWritePulseUs[1];
   fr = lastWritePulseUs[2];
   fl = lastWritePulseUs[3];
   throttle = lastWritePulseUs[4];
-  assistActive = currentRollActive;
+  flaperonActive = currentFlaperonActive;
 }
 
-void getActuatorOutputs(int &br, int &bl, int &fr, int &fl, int &throttle, FlightMode &flightMode, bool &rollActive) {
+void getActuatorOutputs(int &br, int &bl, int &fr, int &fl, int &throttle, FlightMode &flightMode, bool &flaperonActive) {
   br = lastWritePulseUs[0];
   bl = lastWritePulseUs[1];
   fr = lastWritePulseUs[2];
   fl = lastWritePulseUs[3];
   throttle = lastWritePulseUs[4];
   flightMode = currentFlightMode;
-  rollActive = currentRollActive;
+  flaperonActive = currentFlaperonActive;
 }
 
 static void controlTaskLoop(void *parameter) {
@@ -295,8 +324,8 @@ static void controlTaskLoop(void *parameter) {
     int targetFR = neutralFR;
     int targetFL = neutralFL;
 
-    // Symmetric angular limit in us around each servo's own trimmed neutral
-    int anglePulseLimit = (int)(servoMaxAngleDeg * US_PER_DEGREE);
+    // Symmetric angular limit in us around each servo's own trimmed neutral (+/-278us for 25 deg)
+    int anglePulseLimit = (int)(servoMaxAngleDeg * US_PER_DEGREE + 0.5f);
 
     uint16_t c1 = (ch1 > 0) ? ch1 : 1500;
     uint16_t c2 = (ch2 > 0) ? ch2 : 1500;
@@ -307,45 +336,46 @@ static void controlTaskLoop(void *parameter) {
     // Só avalia e atualiza o candidato de modo se o sinal RC estiver ativo e houver pulso válido no CH5.
     // Durante failsafe / perda de sinal, a máquina de modos congela o último estado válido do comando.
     static FlightMode pendingMode = FLIGHT_MODE_1;
-    static bool pendingRoll = false;
+    static bool pendingFlaperon = false;
     static uint8_t debounceCount = 0;
     static bool firstLoopTick = true;
-    static bool lastRollActive = false;
+    static bool lastFlaperonActive = false;
 
     if (!rcSignalLost && c5 > 0) {
       FlightMode candidateMode = currentFlightMode;
-      bool candidateRoll = currentRollActive;
-      decodeCH5WithHysteresis(c5, currentFlightMode, currentRollActive, candidateMode, candidateRoll);
+      bool candidateFlaperon = currentFlaperonActive;
+      decodeCH5WithHysteresis(c5, currentFlightMode, currentFlaperonActive, candidateMode, candidateFlaperon);
 
       if (firstLoopTick) {
         pendingMode = candidateMode;
-        pendingRoll = candidateRoll;
+        pendingFlaperon = candidateFlaperon;
         currentFlightMode = candidateMode;
-        currentRollActive = candidateRoll;
-        currentAssistModeActive = candidateRoll;
+        currentFlaperonActive = candidateFlaperon;
+        currentAssistModeActive = candidateFlaperon;
         lastFlightMode = candidateMode;
-        lastRollActive = candidateRoll;
+        lastFlaperonActive = candidateFlaperon;
         debounceCount = CH5_DEBOUNCE_CONFIRM_TICKS;
       } else {
-        if (candidateMode == pendingMode && candidateRoll == pendingRoll) {
+        if (candidateMode == pendingMode && candidateFlaperon == pendingFlaperon) {
           if (debounceCount < CH5_DEBOUNCE_CONFIRM_TICKS) {
             debounceCount++;
             if (debounceCount >= CH5_DEBOUNCE_CONFIRM_TICKS) {
               currentFlightMode = candidateMode;
-              currentRollActive = candidateRoll;
-              currentAssistModeActive = candidateRoll;
+              currentFlaperonActive = candidateFlaperon;
+              currentAssistModeActive = candidateFlaperon;
             }
           }
         } else {
           pendingMode = candidateMode;
-          pendingRoll = candidateRoll;
+          pendingFlaperon = candidateFlaperon;
           debounceCount = 1;
         }
       }
     }
 
     FlightMode flightMode = currentFlightMode;
-    bool rollActive = currentRollActive;
+    bool flaperonActive = currentFlaperonActive;
+    bool rollActive = true; // Roll control is PERMANENTLY ENABLED
 
     // Safety Failsafe: if MPU6050 IMU is offline/unavailable, force fallback to Mode 1 (Manual)
     // to prevent integrator windup and uncontrolled dive!
@@ -364,22 +394,12 @@ static void controlTaskLoop(void *parameter) {
       resetControlIntegrators();
       resetExtremumSeeking(false);
       lastFlightMode = flightMode;
-      lastRollActive = rollActive;
+      lastFlaperonActive = flaperonActive;
       modeJustChanged = true;
-    } else if (!lastRollActive && rollActive) {
-      // SWB toggled ON (Roll Assist/FBW/ESC engaged) within same flight mode
+    } else if (flaperonActive != lastFlaperonActive) {
+      // SWB toggled Flaperons ON/OFF within same flight mode: clear roll integrator for smooth transition
       rollIntegrator = 0.0f;
-      escRollTimeSec = 0.0f;
-      escRollHPF = 0.0f;
-      escRollFirstTick = true;
-      lastRollActive = rollActive;
-    } else if (lastRollActive && !rollActive) {
-      // SWB toggled OFF (Roll Manual engaged) within same flight mode
-      rollIntegrator = 0.0f;
-      escRollTimeSec = 0.0f;
-      escRollHPF = 0.0f;
-      escRollFirstTick = true;
-      lastRollActive = rollActive;
+      lastFlaperonActive = flaperonActive;
     }
 
     // Read attitude estimation from MPU6050
@@ -433,8 +453,8 @@ static void controlTaskLoop(void *parameter) {
         currentActiveRollKd = PID_ROLL_KD * sqrtf(rollScale);
 
         if (rollActive) {
-          // Roll ON (SWB ON, 1288 us): Roll Assist / Envelope Protection
-          float normC1 = constrain((float)((int)c1 - (int)centerCH1) / 500.0f, -1.0f, 1.0f);
+          // Roll Assist / Envelope Protection (permanentemente ativo em voo normal)
+          float normC1 = constrain((float)((int)c1 - (int)centerCH1) * 0.002f, -1.0f, 1.0f);
           float shapedC1 = (1.0f - RC_EXPO_FACTOR) * normC1 + RC_EXPO_FACTOR * (normC1 * normC1 * normC1);
           float pilotCmdDeg = constrain(shapedC1 * 20.0f, -20.0f, 20.0f);
           float absRoll = fabsf(curRoll);
@@ -457,7 +477,7 @@ static void controlTaskLoop(void *parameter) {
           }
           rollDiff = (int)((effectiveRollCmdDeg / 20.0f) * (float)anglePulseLimit);
         } else {
-          // Roll OFF (SWB OFF, 1076 us): Manual direto 100%
+          // Roll Manual direto 100% (fallback de seguranca caso IMU fique offline)
           rollDiff = applyExpoAndScale((int)c1, (int)centerCH1, anglePulseLimit, RC_EXPO_FACTOR);
         }
         currentTargetRoll = 0.0f;
@@ -468,27 +488,52 @@ static void controlTaskLoop(void *parameter) {
       else if (flightMode == FLIGHT_MODE_2) {
         escIsActive = false; // Modo 2 opera como FBW fixo (sem dither) com os ganhos otimizados do Modo 3
 
+        float pitchScale = constrain(escPitchThetaHat, ESC_PITCH_MIN_SCALE, ESC_PITCH_MAX_SCALE);
         float rollScale = constrain(escRollThetaHat, ESC_ROLL_MIN_SCALE, ESC_ROLL_MAX_SCALE);
-        escCurrentPitchScale = 1.0f;
+        escCurrentPitchScale = pitchScale;
         escCurrentRollScale = rollScale;
+
+        float activePitchKp = PID_PITCH_KP * pitchScale;
+        float activePitchKi = PID_PITCH_KI;
+        float activePitchKd = PID_PITCH_KD * sqrtf(pitchScale);
 
         float activeRollKp = PID_ROLL_KP * rollScale;
         float activeRollKi = PID_ROLL_KI;
         float activeRollKd = PID_ROLL_KD * sqrtf(rollScale);
 
-        // Desativação total do PID de Pitch para segurança anti-stall:
-        // O profundor é 100% manual direto pelo stick CH2 com a mesma curva do Modo 1
-        currentActivePitchKp = 0.0f;
-        currentActivePitchKi = 0.0f;
-        currentActivePitchKd = 0.0f;
+        currentActivePitchKp = activePitchKp;
+        currentActivePitchKi = activePitchKi;
+        currentActivePitchKd = activePitchKd;
         currentActiveRollKp = activeRollKp;
         currentActiveRollKi = activeRollKi;
         currentActiveRollKd = activeRollKd;
 
-        // 1. PITCH: CONTROLO MANUAL DIRETO 100% (Pitch PID Desativado por Segurança contra Stall)
-        pitchDiff = applyExpoAndScale((int)c2, (int)centerCH2, anglePulseLimit, RC_EXPO_FACTOR);
-        currentTargetPitch = 0.0f;
-        pitchIntegrator = 0.0f;
+        // 1. PITCH FBW PI-D (Controlo em Loop Fechado com Feedback Negativo Estável):
+        // Polaridade do Stick CH2: Puxar stick (c2 < 1500us) comanda Cabrar (+deg)
+        //                          Empurrar stick (c2 > 1500us) comanda Picar (-deg)
+        float pilotTargetPitchDeg = -applyExpoAndScaleDeg((int)c2, (int)centerCH2, FBW_MAX_PITCH_DEG, FBW_EXPO_FACTOR);
+
+        // Compensação de Curva Coordenada (Turn Compensation): adiciona atitude positiva de cabrada para compensar perda de sustentação vertical
+        float rollRad = fabsf(curRoll) * DEG_TO_RAD;
+        float turnPitchCompDeg = constrain(TURN_PITCH_COMP_GAIN * (1.0f - cosf(rollRad)), 0.0f, 3.5f);
+        float targetPitchDeg = constrain(pilotTargetPitchDeg + turnPitchCompDeg, -FBW_MAX_PITCH_DEG, FBW_MAX_PITCH_DEG);
+        currentTargetPitch = targetPitchDeg;
+
+        float pitchError = targetPitchDeg - curPitch;
+
+        // Anti-windup condicional: integra apenas com motor ativo e dentro do envelope seguro
+        if (c3 > 1050 && fabsf(curPitch) <= 45.0f && fabsf(curRoll) <= 60.0f) {
+          pitchIntegrator += activePitchKi * pitchError * dt;
+          pitchIntegrator = constrain(pitchIntegrator, -MAX_INTEGRAL_PULSE_US, MAX_INTEGRAL_PULSE_US);
+        } else {
+          pitchIntegrator = 0.0f;
+        }
+
+        float pitchPidOut = (activePitchKp * pitchError) + pitchIntegrator - (activePitchKd * pitchRateDegS);
+        // Cinemática de Atuação V-Tail: pitchDiff < 0 é CABRAR (BR diminui, BL aumenta)
+        // Com curPitch alto (pitchError < 0 -> pitchPidOut < 0), pitchDiff DEVE ser positivo para PICAR!
+        // Portanto: pitchDiff = -pitchPidOut garante realimentação negativa estável.
+        pitchDiff = -constrain((int)pitchPidOut, -anglePulseLimit, anglePulseLimit);
 
         // 2. ROLL FBW:
         if (rollActive) {
@@ -497,7 +542,7 @@ static void controlTaskLoop(void *parameter) {
 
           float rollError = targetRollDeg - curRoll;
 
-          if (c3 > 1050) {
+          if (c3 > 1050 && fabsf(curRoll) <= 60.0f) {
             rollIntegrator += activeRollKi * rollError * dt;
             rollIntegrator = constrain(rollIntegrator, -MAX_INTEGRAL_PULSE_US, MAX_INTEGRAL_PULSE_US);
           } else {
@@ -515,21 +560,35 @@ static void controlTaskLoop(void *parameter) {
 
       // ── MODO 3: FLY-BY-WIRE COM APERFEIÇOAMENTO ADAPTATIVO (EXTREMUM SEEKING PI-D) ──
       else {
-        escIsActive = rollActive; // Extremum Seeking ativo exclusivamente no eixo de Roll quando rollActive está ligado
+        escIsActive = rollActive && !flaperonActive; // Extremum Seeking ativo no eixo de Roll (desativado se flaperons ON)
 
-        // 1. PITCH: CONTROLO MANUAL DIRETO 100% (Pitch PID e Calibração/ESC Desativados por Segurança contra Stall)
-        pitchDiff = applyExpoAndScale((int)c2, (int)centerCH2, anglePulseLimit, RC_EXPO_FACTOR);
-        currentTargetPitch = 0.0f;
-        pitchIntegrator = 0.0f;
+        float pitchScale = constrain(escPitchThetaHat, ESC_PITCH_MIN_SCALE, ESC_PITCH_MAX_SCALE);
+        float activePitchKp = PID_PITCH_KP * pitchScale;
+        float activePitchKi = PID_PITCH_KI;
+        float activePitchKd = PID_PITCH_KD * sqrtf(pitchScale);
+        currentActivePitchKp = activePitchKp;
+        currentActivePitchKi = activePitchKi;
+        currentActivePitchKd = activePitchKd;
+        escCurrentPitchScale = pitchScale;
 
-        // Desativação total dos ganhos de Pitch e congelamento da perturbação
-        currentActivePitchKp = 0.0f;
-        currentActivePitchKi = 0.0f;
-        currentActivePitchKd = 0.0f;
-        escCurrentPitchScale = 1.0f;
-        escPitchTimeSec = 0.0f;
-        escPitchHPF = 0.0f;
-        escPitchFirstTick = true;
+        // 1. PITCH FBW PI-D (Controlo em Loop Fechado com Feedback Negativo Estável):
+        float pilotTargetPitchDeg = -applyExpoAndScaleDeg((int)c2, (int)centerCH2, FBW_MAX_PITCH_DEG, FBW_EXPO_FACTOR);
+        float rollRad = fabsf(curRoll) * DEG_TO_RAD;
+        float turnPitchCompDeg = constrain(TURN_PITCH_COMP_GAIN * (1.0f - cosf(rollRad)), 0.0f, 3.5f);
+        float targetPitchDeg = constrain(pilotTargetPitchDeg + turnPitchCompDeg, -FBW_MAX_PITCH_DEG, FBW_MAX_PITCH_DEG);
+        currentTargetPitch = targetPitchDeg;
+
+        float pitchError = targetPitchDeg - curPitch;
+
+        if (c3 > 1050 && fabsf(curPitch) <= 45.0f && fabsf(curRoll) <= 60.0f) {
+          pitchIntegrator += activePitchKi * pitchError * dt;
+          pitchIntegrator = constrain(pitchIntegrator, -MAX_INTEGRAL_PULSE_US, MAX_INTEGRAL_PULSE_US);
+        } else {
+          pitchIntegrator = 0.0f;
+        }
+
+        float pitchPidOut = (activePitchKp * pitchError) + pitchIntegrator - (activePitchKd * pitchRateDegS);
+        pitchDiff = -constrain((int)pitchPidOut, -anglePulseLimit, anglePulseLimit);
 
         // 2. ROLL FBW COM EXTREMUM SEEKING (Se Roll Active):
         if (rollActive) {
@@ -554,7 +613,7 @@ static void controlTaskLoop(void *parameter) {
           currentActiveRollKi = activeRollKi;
           currentActiveRollKd = activeRollKd;
 
-          if (c3 > 1050) {
+          if (c3 > 1050 && fabsf(curRoll) <= 60.0f) {
             rollIntegrator += activeRollKi * rollError * dt;
             rollIntegrator = constrain(rollIntegrator, -MAX_INTEGRAL_PULSE_US, MAX_INTEGRAL_PULSE_US);
           } else {
@@ -602,12 +661,38 @@ static void controlTaskLoop(void *parameter) {
       // FR + FL (Front Rollerons) = ROLL (CH1)
       int pitchOffsetBR = pitchDiff;
       int pitchOffsetBL = -pitchDiff; // Inverted BL (mirrored servo mounting)
-      int rollOffsetFR =
-          -rollDiff; // Servos physically mirrored: same PWM sign → opposite
-                     // mechanical deflection on each wing
-      int rollOffsetFL = -rollDiff; // idem
 
-      // Each servo constrained symmetrically around its own trimmed neutral
+      // Flaperons (Landing Flaps): Up to 15 deg DOWN offset on both surfaces,
+      // governed smoothly by throttle between 1500us and 1200us (linear uniform transition).
+      // Deflection is calculated directly from each surface's mechanical trim neutral (encaixe mecânico).
+      float flaperonScale = 0.0f;
+      if (flaperonActive) {
+        if (c3 <= FLAPERON_THROTTLE_MIN_US) {
+          flaperonScale = 1.0f;
+        } else if (c3 >= FLAPERON_THROTTLE_MAX_US) {
+          flaperonScale = 0.0f;
+        } else {
+          flaperonScale = (float)(FLAPERON_THROTTLE_MAX_US - (int)c3) /
+                          (float)(FLAPERON_THROTTLE_MAX_US - FLAPERON_THROTTLE_MIN_US);
+        }
+      }
+
+      // Dynamic Anti-Saturation & Roll Priority:
+      // When roll demand is high, flaperon offset is dynamically scaled by remaining headroom
+      // ensuring zero control clipping at stick extremes and protecting mechanical servo limits.
+      float rollDemandRatio = constrain(fabsf((float)rollDiff) / (float)anglePulseLimit, 0.0f, 1.0f);
+      float flaperonHeadroom = 1.0f - rollDemandRatio;
+      float effectiveFlaperonScale = flaperonScale * flaperonHeadroom;
+
+      int flaperonOffsetFR = (int)roundf((float)FLAPERON_US_FR * effectiveFlaperonScale);
+      int flaperonOffsetFL = (int)roundf((float)FLAPERON_US_FL * effectiveFlaperonScale);
+
+      int rollOffsetFR =
+          flaperonOffsetFR - rollDiff; // Servos physically mirrored: same PWM sign -> opposite
+                                       // mechanical deflection on each wing
+      int rollOffsetFL = flaperonOffsetFL - rollDiff; // idem
+
+      // Each servo constrained symmetrically around its own trimmed neutral and within hardware limits [1000, 2000] us
       targetBR =
           constrain(neutralBR + pitchOffsetBR, neutralBR - anglePulseLimit,
                     neutralBR + anglePulseLimit);
@@ -620,6 +705,11 @@ static void controlTaskLoop(void *parameter) {
       targetFL =
           constrain(neutralFL + rollOffsetFL, neutralFL - anglePulseLimit,
                     neutralFL + anglePulseLimit);
+
+      targetBR = constrain(targetBR, 1000, 2000);
+      targetBL = constrain(targetBL, 1000, 2000);
+      targetFR = constrain(targetFR, 1000, 2000);
+      targetFL = constrain(targetFL, 1000, 2000);
     } else {
       // Failsafe: return to trimmed neutral, motor off
       targetThrottle = THROTTLE_MIN_PULSE;
@@ -651,8 +741,10 @@ static void controlTaskLoop(void *parameter) {
 
 bool setThrottlePulse(int pulseWidthUs) {
   if (isLowVoltageCutoffTriggered()) {
-    emergencyCutoffESC();
-    return false;
+    // Soft power ceiling: allow up to ~35-40% throttle (1350us) to maintain flight and glide back safely
+    if (pulseWidthUs > THROTTLE_LOW_VOLT_CEILING_PULSE) {
+      pulseWidthUs = THROTTLE_LOW_VOLT_CEILING_PULSE;
+    }
   }
   if (pulseWidthUs >= THROTTLE_MIN_PULSE &&
       pulseWidthUs <= THROTTLE_MAX_PULSE) {

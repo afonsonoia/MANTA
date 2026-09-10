@@ -28,12 +28,12 @@ from telemetry_codec import decode_ch5_mode
 
 # ── 1. GROUND TRUTH CALIBRATED TRANSMITTER VALUES ──────────────────────────────
 NOMINAL_CH5_CALIBRATION = [
-    {"index": 0, "swc": 1, "swb": "OFF", "pwm": 1166, "mode": 1, "roll": False, "name": "Modo 1 + Roll OFF"},
-    {"index": 1, "swc": 2, "swb": "OFF", "pwm": 1328, "mode": 2, "roll": False, "name": "Modo 2 (FBW Fixo) + Roll OFF"},
-    {"index": 2, "swc": 3, "swb": "OFF", "pwm": 1411, "mode": 3, "roll": False, "name": "Modo 3 (ESC PI-D) + Roll OFF"},
-    {"index": 3, "swc": 1, "swb": "ON",  "pwm": 1541, "mode": 1, "roll": True,  "name": "Modo 1 + Roll ON"},
-    {"index": 4, "swc": 2, "swb": "ON",  "pwm": 1825, "mode": 2, "roll": True,  "name": "Modo 2 (FBW Fixo) + Roll ON"},
-    {"index": 5, "swc": 3, "swb": "ON",  "pwm": 1942, "mode": 3, "roll": True,  "name": "Modo 3 (ESC PI-D) + Roll ON"},
+    {"index": 0, "swc": 1, "swb": "OFF", "pwm": 1166, "mode": 1, "flaperon": False, "name": "Modo 1 + Flaperons OFF"},
+    {"index": 1, "swc": 2, "swb": "OFF", "pwm": 1328, "mode": 2, "flaperon": False, "name": "Modo 2 (FBW Fixo) + Flaperons OFF"},
+    {"index": 2, "swc": 3, "swb": "OFF", "pwm": 1411, "mode": 3, "flaperon": False, "name": "Modo 3 (ESC PI-D) + Flaperons OFF"},
+    {"index": 3, "swc": 1, "swb": "ON",  "pwm": 1541, "mode": 1, "flaperon": True,  "name": "Modo 1 + Flaperons ON"},
+    {"index": 4, "swc": 2, "swb": "ON",  "pwm": 1825, "mode": 2, "flaperon": True,  "name": "Modo 2 (FBW Fixo) + Flaperons ON"},
+    {"index": 5, "swc": 3, "swb": "ON",  "pwm": 1942, "mode": 2, "flaperon": True,  "name": "Modo 2 (Auto Flap-Safe) + Flaperons ON"},
 ]
 
 EXPECTED_MIDPOINTS = [
@@ -136,42 +136,42 @@ class TestPythonTelemetryCodecSync:
 
     def test_nominal_values_decode_to_exact_flight_modes(self):
         for item in NOMINAL_CH5_CALIBRATION:
-            mode, roll, name = decode_ch5_mode(item["pwm"])
+            mode, flap, name = decode_ch5_mode(item["pwm"])
             assert mode == item["mode"], f"Nominal {item['pwm']}us decoded mode {mode} != expected {item['mode']}"
-            assert roll == item["roll"], f"Nominal {item['pwm']}us decoded roll {roll} != expected {item['roll']}"
+            assert flap == item["flaperon"], f"Nominal {item['pwm']}us decoded flap {flap} != expected {item['flaperon']}"
             assert name == item["name"]
 
     def test_boundary_transitions_occur_exactly_at_midpoints(self):
         """Tests that 1us below midpoint stays in lower mode, and at midpoint enters upper mode."""
         midpoint_transitions = [
             # (midpoint, expected_below, expected_at_or_above)
-            (1247, (1, False), (2, False)),
-            (1370, (2, False), (3, False)),
-            (1476, (3, False), (1, True)),
-            (1683, (1, True),  (2, True)),
-            (1884, (2, True),  (3, True)),
+            (1247, (1, False, "Modo 1 + Flaperons OFF"),               (2, False, "Modo 2 (FBW Fixo) + Flaperons OFF")),
+            (1370, (2, False, "Modo 2 (FBW Fixo) + Flaperons OFF"),   (3, False, "Modo 3 (ESC PI-D) + Flaperons OFF")),
+            (1476, (3, False, "Modo 3 (ESC PI-D) + Flaperons OFF"),   (1, True,  "Modo 1 + Flaperons ON")),
+            (1683, (1, True,  "Modo 1 + Flaperons ON"),               (2, True,  "Modo 2 (FBW Fixo) + Flaperons ON")),
+            (1884, (2, True,  "Modo 2 (FBW Fixo) + Flaperons ON"),   (2, True,  "Modo 2 (Auto Flap-Safe) + Flaperons ON")),
         ]
 
         for midpoint, expected_below, expected_above in midpoint_transitions:
             # 1 us below midpoint -> lower mode
-            mode_below, roll_below, _ = decode_ch5_mode(midpoint - 1)
-            assert (mode_below, roll_below) == expected_below, (
+            res_below = decode_ch5_mode(midpoint - 1)
+            assert res_below == expected_below, (
                 f"At {midpoint - 1} us (1us below midpoint {midpoint}), "
-                f"expected {expected_below}, got {(mode_below, roll_below)}"
+                f"expected {expected_below}, got {res_below}"
             )
 
             # Exactly at midpoint -> upper mode
-            mode_above, roll_above, _ = decode_ch5_mode(midpoint)
-            assert (mode_above, roll_above) == expected_above, (
+            res_above = decode_ch5_mode(midpoint)
+            assert res_above == expected_above, (
                 f"At {midpoint} us (exact midpoint), "
-                f"expected {expected_above}, got {(mode_above, roll_above)}"
+                f"expected {expected_above}, got {res_above}"
             )
 
             # 1 us above midpoint -> upper mode
-            mode_above2, roll_above2, _ = decode_ch5_mode(midpoint + 1)
-            assert (mode_above2, roll_above2) == expected_above, (
+            res_above2 = decode_ch5_mode(midpoint + 1)
+            assert res_above2 == expected_above, (
                 f"At {midpoint + 1} us (1us above midpoint {midpoint}), "
-                f"expected {expected_above}, got {(mode_above2, roll_above2)}"
+                f"expected {expected_above}, got {res_above2}"
             )
 
     def test_continuous_1us_resolution_sweep_900_to_2100(self):
@@ -182,8 +182,8 @@ class TestPythonTelemetryCodecSync:
         transition_points = []
 
         for pulse in range(900, 2101):
-            mode, roll, _ = decode_ch5_mode(pulse)
-            state = (mode, roll)
+            mode, flap, name = decode_ch5_mode(pulse)
+            state = (mode, flap, name)
             if last_state is not None and state != last_state:
                 transition_points.append((pulse, last_state, state))
             last_state = state

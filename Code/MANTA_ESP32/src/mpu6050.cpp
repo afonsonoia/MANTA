@@ -176,6 +176,7 @@ void sampleMPU6050Uniformly() {
     return;
   }
   consecutiveI2CErrors = 0;
+  mpuInitialized = true;
 
   uint8_t buffer[14];
   for (int i = 0; i < 14; i++) {
@@ -226,8 +227,9 @@ void sampleMPU6050Uniformly() {
   }
 
   // Convert raw gyro to rad/s (32.8 LSB / (deg/s) for +/- 1000 deg/s range)
-  // Gyro X (Pitch) and Gyro Y (Roll) are inverted (-1.0f) to match physical
-  // airframe axes on MANTA PCB
+  // MANTA PCB mounting orientation (MPU6050 header rotated at -90 deg):
+  // Sensor X axis is aligned with airframe Pitch, Sensor Y axis is aligned with airframe Roll.
+  // Negation (-1.0f) ensures right-hand rule positive pitch (nose up) and positive roll (right wing down).
   float gx_rad = -1.0f * ((gx - gyroBiasX) / 32.8f) * DEG_TO_RAD;
   float gy_rad = -1.0f * ((gy - gyroBiasY) / 32.8f) * DEG_TO_RAD;
   float gz_rad = ((gz - gyroBiasZ) / 32.8f) * DEG_TO_RAD;
@@ -320,12 +322,12 @@ void sampleMPU6050Uniformly() {
   float sinp = 2.0f * (q0 * q1 + q2 * q3);
   sinp = constrain(sinp, -1.0f, 1.0f);
   currentPitch = (asinf(sinp) * (180.0f / M_PI)) -
-                 9.2f; // Calibrated level mounting trim (-9.2 deg total, subtracted 3.7 deg)
+                 IMU_PITCH_MOUNTING_OFFSET_DEG;
   currentRoll = (-1.0f *
                  atan2f(2.0f * (q0 * q2 - q1 * q3),
                         q0 * q0 - q1 * q1 - q2 * q2 + q3 * q3) *
                  (180.0f / M_PI)) -
-                1.9f; // Calibrated level mounting trim (-1.9 deg total, subtracted 0.9 deg)
+                IMU_ROLL_MOUNTING_OFFSET_DEG;
   currentYaw = atan2f(2.0f * (q0 * q3 + q1 * q2),
                       q0 * q0 + q1 * q1 - q2 * q2 - q3 * q3) *
                (180.0f / M_PI);
