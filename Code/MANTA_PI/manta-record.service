@@ -1,0 +1,17 @@
+[Unit]
+Description=MANTA UAV Automatic Safe Flight Video Recorder
+After=multi-user.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=pc
+WorkingDirectory=/home/pc
+ExecStart=/bin/bash /home/pc/MANTA/Code/MANTA_PI/record_flight.sh
+Restart=on-failure
+RestartSec=5s
+KillSignal=SIGINT
+TimeoutStopSec=5s
+
+[Install]
+WantedBy=multi-user.target
