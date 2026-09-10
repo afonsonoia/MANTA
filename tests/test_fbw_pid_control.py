@@ -45,7 +45,7 @@ def calculate_turn_compensation(roll_deg: float, gain: float = 6.0, max_comp: fl
 
 def pid_step(target_deg: float, cur_deg: float, rate_deg_s: float, dt: float,
              integrator: float, kp: float, ki: float, kd: float,
-             max_i: float = 50.0, limit_us: float = 278.0, throttle_active: bool = True):
+             max_i: float = 100.0, limit_us: float = 278.0, throttle_active: bool = True):
     """Mirror of the PI-D step in control.cpp"""
     error = target_deg - cur_deg
 
@@ -340,16 +340,16 @@ class TestPIDLoop:
         for _ in range(200):
             _, integrator = pid_step(target_deg=10.0, cur_deg=0.0, rate_deg_s=0.0, dt=dt,
                                      integrator=integrator, kp=kp, ki=ki, kd=kd,
-                                     max_i=50.0, throttle_active=True)
+                                     max_i=100.0, throttle_active=True)
 
-        assert integrator == 50.0  # Clamped at MAX_INTEGRAL_PULSE_US
+        assert integrator == 100.0  # Clamped at MAX_INTEGRAL_PULSE_US
 
     def test_reset_when_throttle_inactive(self):
         kp, ki, kd = 5.00, 2.50, 0.450
         dt = 0.020
 
         _, integrator = pid_step(target_deg=10.0, cur_deg=0.0, rate_deg_s=0.0, dt=dt,
-                                 integrator=50.0, kp=kp, ki=ki, kd=kd, throttle_active=False)
+                                 integrator=100.0, kp=kp, ki=ki, kd=kd, throttle_active=False)
 
         assert integrator == 0.0
 
@@ -359,7 +359,7 @@ class TestPIDLoop:
         """
         ki = 5.00
         dt = 0.020
-        max_i = 50.0
+        max_i = 100.0
 
         def update_roll_integrator(integrator: float, roll_error: float, throttle_us: int, cur_roll: float) -> float:
             if throttle_us > 1050 and abs(cur_roll) <= 60.0:
@@ -815,15 +815,15 @@ class TestPitchFBWClosedLoopSafety:
         assert turn_comp <= 3.5
 
     def test_pitch_anti_windup_clamping(self):
-        # Integrator must clamp at MAX_INTEGRAL_PULSE_US (50.0 us)
+        # Integrator must clamp at MAX_INTEGRAL_PULSE_US (100.0 us)
         kp, ki, kd = 5.00, 2.50, 0.450
         dt = 0.020
         integrator = 0.0
         for _ in range(200):
             _, integrator = pid_step(target_deg=10.0, cur_deg=0.0, rate_deg_s=0.0, dt=dt,
                                      integrator=integrator, kp=kp, ki=ki, kd=kd,
-                                     max_i=50.0, throttle_active=True)
-        assert integrator == 50.0
+                                     max_i=100.0, throttle_active=True)
+        assert integrator == 100.0
 
     def test_pitch_rate_damping_opposes_rotation(self):
         # When pitching up at +20 deg/s, D-term reduces pitchPidOut, which increases pitchDiff (pushes down)

@@ -120,8 +120,10 @@ constexpr float FBW_MAX_ROLL_DEG = 45.0f;
 // FBW Stick Exponential Factor (0.08 = ~92% linear, soft center without deadened feeling)
 constexpr float FBW_EXPO_FACTOR = 0.08f;
 
-// Anti-windup maximum integral authority in PWM microseconds
-constexpr float MAX_INTEGRAL_PULSE_US = 50.0f;
+// Anti-windup maximum integral authority in PWM microseconds:
+// Expanded from 50.0us (+/-4.5 deg) to 100.0us (+/-9.0 deg trim authority, ~36% of anglePulseLimit = 278us)
+// to reliably eliminate steady-state attitude droop while reserving 178us (64%) for dynamic P+D response.
+constexpr float MAX_INTEGRAL_PULSE_US = 100.0f;
 
 // Coordinated Turn Pitch Compensation Gain (compensates vertical lift drop in turns)
 constexpr float TURN_PITCH_COMP_GAIN = 6.0f; // degrees factor: ~1.8 deg added at 45 deg bank

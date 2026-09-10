@@ -39,7 +39,7 @@
 >
 > **REGRA DE SEGURANÇA ANTI-APRENDIZAGEM**: Se o modo de Flaperons estiver ligado (SWB ON), o **Modo 3 não pode estar ativo** (mesmo com motor alto). Qualquer tentativa ou comando para Modo 3 coloca a aeronave **automaticamente no Modo 2** para impedir que o algoritmo Extremum Seeking adapte ganhos PID com base em características aerodinâmicas temporárias de aterragem.
 >
-> **Feedback Negativo Estável & Anti-Stall**: A equação de controlo de **Pitch PI-D** garante realimentação estritamente negativa (`pitchDiff = -constrain(pitchPidOut)`). Limite anti-stall de subida em FBW: **25°** (`FBW_MAX_PITCH_DEG = 25.0f`, $K_p = 5.00$).
+> **Feedback Negativo Estável & Anti-Stall**: A equação de controlo de **Pitch PI-D** garante realimentação estritamente negativa (`pitchDiff = -constrain(pitchPidOut)`). Limite anti-stall de subida em FBW: **25°** (`FBW_MAX_PITCH_DEG = 25.0f`, $K_p = 5.00$). Teto anti-windup da componente integrativa: **±100 µs** (`MAX_INTEGRAL_PULSE_US = 100.0f`, garantindo ±9.0° de autoridade de trim para eliminar erro residual mantendo 64% de folga dinâmica para P+D).
 
 | SWC | SWB | CH5 PWM Medido | Modo Ativo | Flaperons | Descrição |
 |:---:|:---:|:--------------:|:----------:|:---------:|:----------|
