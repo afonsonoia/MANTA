@@ -24,11 +24,28 @@ constexpr int PIN_SERVO_FL = 26; // Front Left (GPIO26)
 constexpr uint8_t DEFAULT_RC_MARGIN_DEADBAND =
     4;  // Median filter already eliminates ISR jitter — 4us deadband prevents servo buzz without masking real stick input
 
-// Servo Rotation Angle Limits & Conversion Factors (Default +/-20 degrees)
+// Servo Rotation Angle Limits & Conversion Factors (Default +/-25 degrees)
 constexpr float US_PER_DEGREE =
     11.11f; // ~11.11us per degree (1000us total span / 90 deg)
 constexpr uint8_t DEFAULT_SERVO_MAX_ANGLE_DEG =
-    20; // Default +/- 20 degrees rotation limit (~222us from neutral: 1278us - 1722us)
+    25; // Default +/- 25 degrees rotation limit (~278us from neutral: 1222us - 1778us)
+
+// Flaperons (Landing Flaps) Parameters: Deflect both roll surfaces 15 degrees DOWN
+constexpr float FLAPERON_DEFLECTION_DEG = 15.0f; // 15.0 deg DOWN max deflection for approach and landing
+constexpr int FLAPERON_OFFSET_US =
+    (int)(FLAPERON_DEFLECTION_DEG * US_PER_DEGREE + 0.5f); // ~167 us
+// Servos FR & FL are physically mirrored:
+// Deflection is calculated directly from each servo's trimmed neutral (spline/horn fit):
+// For FL: negative PWM deflects DOWN (-167 us from trimmed neutral)
+// For FR: positive PWM deflects DOWN (+167 us from trimmed neutral)
+constexpr int FLAPERON_US_FR = +FLAPERON_OFFSET_US; // +167 us -> deflects right rolleron DOWN
+constexpr int FLAPERON_US_FL = -FLAPERON_OFFSET_US; // -167 us -> deflects left rolleron DOWN
+
+// Flaperon Throttle Governor Parameters:
+// Flaperons deploy smoothly between 1500us and 1200us throttle (linear uniform transition).
+// Above 1500us they are fully retracted (0 offset). Below 1200us they reach full 15.0 deg deflection.
+constexpr int FLAPERON_THROTTLE_MAX_US = 1500; // >= 1500 us: Flaperons fully retracted (0 offset)
+constexpr int FLAPERON_THROTTLE_MIN_US = 1200; // <= 1200 us: Flaperons fully deployed (15.0 deg DOWN)
 
 // RC Stick Exponential Response Factor (0.0 = Linear, 1.0 = Pure Cubic; 0.35 = 35% Expo for center stick precision)
 constexpr float RC_EXPO_FACTOR = 0.35f;
@@ -87,27 +104,34 @@ constexpr int THROTTLE_OUTPUT_MAX_US =
 
 // ── FLY-BY-WIRE & CLOSED-LOOP PID PARAMETERS (Hélice Principal) ─────────────
 // Pitch PI-D Gains (V-Tail: Servos BR & BL)
-constexpr float PID_PITCH_KP = 9.35f;
-constexpr float PID_PITCH_KI = 5.00f;
-constexpr float PID_PITCH_KD = 0.623f;
+constexpr float PID_PITCH_KP = 5.00f;
+constexpr float PID_PITCH_KI = 2.50f;
+constexpr float PID_PITCH_KD = 0.450f;
 
 // Roll PI-D Gains (Rollerons: Servos FR & FL)
 constexpr float PID_ROLL_KP = 15.00f;
 constexpr float PID_ROLL_KI = 5.00f;
 constexpr float PID_ROLL_KD = 1.500f;
 
-// Fly-By-Wire Attitude Angle Limits (+/- 45 degrees)
-constexpr float FBW_MAX_PITCH_DEG = 45.0f;
+// Fly-By-Wire Attitude Angle Limits: Pitch capped at 25 deg for stall prevention, Roll at 45 deg
+constexpr float FBW_MAX_PITCH_DEG = 25.0f;
 constexpr float FBW_MAX_ROLL_DEG = 45.0f;
 
 // FBW Stick Exponential Factor (0.08 = ~92% linear, soft center without deadened feeling)
 constexpr float FBW_EXPO_FACTOR = 0.08f;
 
 // Anti-windup maximum integral authority in PWM microseconds
-constexpr float MAX_INTEGRAL_PULSE_US = 70.0f;
+constexpr float MAX_INTEGRAL_PULSE_US = 50.0f;
 
 // Coordinated Turn Pitch Compensation Gain (compensates vertical lift drop in turns)
-constexpr float TURN_PITCH_COMP_GAIN = 10.0f; // degrees factor: ~2.9 deg added at 45 deg bank
+constexpr float TURN_PITCH_COMP_GAIN = 6.0f; // degrees factor: ~1.8 deg added at 45 deg bank
+
+// ── IMU MOUNTING ATTITUDE TRIM OFFSETS (Degrees) ───────────────────────────
+// Pitch mounting offset: Calibrated level mounting trim
+constexpr float IMU_PITCH_MOUNTING_OFFSET_DEG = 9.2f;
+// Roll mounting offset: Calibrated to provide true zero-roll straight flight reference
+// (+2.5 deg correction over original 1.9 deg to eliminate left-roll bank / counter-clockwise turning bias)
+constexpr float IMU_ROLL_MOUNTING_OFFSET_DEG = 4.4f;
 
 // ── EXTREMUM SEEKING CONTROL (ESC) PARAMETERS (MODO 2) ──────────────────────
 // Pitch Extremum Seeking: Dither frequency ~1.0 Hz, amplitude ~0.08 (8% variation)
@@ -133,12 +157,12 @@ constexpr float ESC_ROLL_RATE_WEIGHT = 0.02f;
 
 // ── CH5 FLIGHT MODE TRANSMITTER CALIBRATION & EMI HYSTERESIS THRESHOLDS ──────
 // Calibrated transmitter PWM values:
-// SWC 1 + SWB OFF = 1166us (Mode 1 + Roll OFF)
-// SWC 2 + SWB OFF = 1328us (Mode 2 + Roll OFF)
-// SWC 3 + SWB OFF = 1411us (Mode 3 + Roll OFF)
-// SWC 1 + SWB ON  = 1541us (Mode 1 + Roll ON)
-// SWC 2 + SWB ON  = 1825us (Mode 2 + Roll ON)
-// SWC 3 + SWB ON  = 1942us (Mode 3 + Roll ON)
+// SWC 1 + SWB OFF = 1166us (Mode 1 + Flaperons OFF)
+// SWC 2 + SWB OFF = 1328us (Mode 2 + Flaperons OFF)
+// SWC 3 + SWB OFF = 1411us (Mode 3 + Flaperons OFF)
+// SWC 1 + SWB ON  = 1541us (Mode 1 + Flaperons ON: 15 deg DOWN)
+// SWC 2 + SWB ON  = 1825us (Mode 2 + Flaperons ON: 15 deg DOWN)
+// SWC 3 + SWB ON  = 1942us (Mode 2 Auto Flap-Safe + Flaperons ON: 15 deg DOWN)
 
 // Decision thresholds with Schmitt-trigger hysteresis bands for EMI rejection:
 // Transition 1: Mode 1 OFF <-> Mode 2 OFF (Midpoint ~1247us)

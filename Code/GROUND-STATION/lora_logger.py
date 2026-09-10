@@ -709,6 +709,8 @@ class BatteryAnalyzerGUI:
                     data = self.serial_conn.read(in_w)
                     if data:
                         raw_bytes_buffer.extend(data)
+                        if len(raw_bytes_buffer) > 2048:
+                            raw_bytes_buffer = raw_bytes_buffer[-512:]
                         while len(raw_bytes_buffer) >= PACKET_SIZE:
                             idx = raw_bytes_buffer.find(b'MT')
                             if idx == -1:

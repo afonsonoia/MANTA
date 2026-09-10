@@ -25,42 +25,89 @@ TELEMETRY_PACKET_FORMAT = PACKET_FORMAT_PID
 TELEMETRY_PACKET_SIZE = struct.calcsize(PACKET_FORMAT_PID)  # 61 bytes
 PACKET_SIZE = TELEMETRY_PACKET_SIZE
 SUPPORTED_PACKET_SIZES = [61, 49, 33, 31, 35]
+SUPPORTED_PACKET_SIZES_DESC = (61, 49, 35, 33, 31)
+
+# Pre-compiled Struct instances for zero-allocation parsing
+STRUCT_PID = struct.Struct(PACKET_FORMAT_PID)
+STRUCT_PID_NO_CRC = struct.Struct(PACKET_FORMAT_PID[:-1])
+STRUCT_49B = struct.Struct(PACKET_FORMAT_49B)
+STRUCT_49B_NO_CRC = struct.Struct(PACKET_FORMAT_49B[:-1])
+STRUCT_61B_GPS = struct.Struct(PACKET_FORMAT_61B_GPS)
+STRUCT_61B_GPS_NO_CRC = struct.Struct(PACKET_FORMAT_61B_GPS[:-1])
+STRUCT_4CH = struct.Struct(PACKET_FORMAT_4CH)
+STRUCT_4CH_NO_CRC = struct.Struct(PACKET_FORMAT_4CH[:-1])
+STRUCT_3CH = struct.Struct(PACKET_FORMAT_3CH)
+STRUCT_3CH_NO_CRC = struct.Struct(PACKET_FORMAT_3CH[:-1])
+STRUCT_5CH = struct.Struct(PACKET_FORMAT_5CH)
+STRUCT_5CH_NO_CRC = struct.Struct(PACKET_FORMAT_5CH[:-1])
+STRUCT_CRC = struct.Struct("<H")
+
+CRC16_TABLE = (
+    0x0000, 0xC0C1, 0xC181, 0x0140, 0xC301, 0x03C0, 0x0280, 0xC241,
+    0xC601, 0x06C0, 0x0780, 0xC741, 0x0500, 0xC5C1, 0xC481, 0x0440,
+    0xCC01, 0x0CC0, 0x0D80, 0xCD41, 0x0F00, 0xCFC1, 0xCE81, 0x0E40,
+    0x0A00, 0xCAC1, 0xCB81, 0x0B40, 0xC901, 0x09C0, 0x0880, 0xC841,
+    0xD801, 0x18C0, 0x1980, 0xD941, 0x1B00, 0xDBC1, 0xDA81, 0x1A40,
+    0x1E00, 0xDEC1, 0xDF81, 0x1F40, 0xDD01, 0x1DC0, 0x1C80, 0xDC41,
+    0x1400, 0xD4C1, 0xD581, 0x1540, 0xD701, 0x17C0, 0x1680, 0xD641,
+    0xD201, 0x12C0, 0x1380, 0xD341, 0x1100, 0xD1C1, 0xD081, 0x1040,
+    0xF001, 0x30C0, 0x3180, 0xF141, 0x3300, 0xF3C1, 0xF281, 0x3240,
+    0x3600, 0xF6C1, 0xF781, 0x3740, 0xF501, 0x35C0, 0x3480, 0xF441,
+    0x3C00, 0xFCC1, 0xFD81, 0x3D40, 0xFF01, 0x3FC0, 0x3E80, 0xFE41,
+    0xFA01, 0x3AC0, 0x3B80, 0xFB41, 0x3900, 0xF9C1, 0xF881, 0x3840,
+    0x2800, 0xE8C1, 0xE981, 0x2940, 0xEB01, 0x2BC0, 0x2A80, 0xEA41,
+    0xEE01, 0x2EC0, 0x2F80, 0xEF41, 0x2D00, 0xEDC1, 0xEC81, 0x2C40,
+    0xE401, 0x24C0, 0x2580, 0xE541, 0x2700, 0xE7C1, 0xE681, 0x2640,
+    0x2200, 0xE2C1, 0xE381, 0x2340, 0xE101, 0x21C0, 0x2080, 0xE041,
+    0xA001, 0x60C0, 0x6180, 0xA141, 0x6300, 0xA3C1, 0xA281, 0x6240,
+    0x6600, 0xA6C1, 0xA781, 0x6740, 0xA501, 0x65C0, 0x6480, 0xA441,
+    0x6C00, 0xACC1, 0xAD81, 0x6D40, 0xAF01, 0x6FC0, 0x6E80, 0xAE41,
+    0xAA01, 0x6AC0, 0x6B80, 0xAB41, 0x6900, 0xA9C1, 0xA881, 0x6840,
+    0x7800, 0xB8C1, 0xB981, 0x7940, 0xBB01, 0x7BC0, 0x7A80, 0xBA41,
+    0xBE01, 0x7EC0, 0x7F80, 0xBF41, 0x7D00, 0xBDC1, 0xBC81, 0x7C40,
+    0xB401, 0x74C0, 0x7580, 0xB541, 0x7700, 0xB7C1, 0xB681, 0x7640,
+    0x7200, 0xB2C1, 0xB381, 0x7340, 0xB101, 0x71C0, 0x7080, 0xB041,
+    0x5000, 0x90C1, 0x9181, 0x5140, 0x9301, 0x53C0, 0x5280, 0x9241,
+    0x9601, 0x56C0, 0x5780, 0x9741, 0x5500, 0x95C1, 0x9481, 0x5440,
+    0x9C01, 0x5CC0, 0x5D80, 0x9D41, 0x5F00, 0x9FC1, 0x9E81, 0x5E40,
+    0x5A00, 0x9AC1, 0x9B81, 0x5B40, 0x9901, 0x59C0, 0x5880, 0x9841,
+    0x8801, 0x48C0, 0x4980, 0x8941, 0x4B00, 0x8BC1, 0x8A81, 0x4A40,
+    0x4E00, 0x8EC1, 0x8F81, 0x4F40, 0x8D01, 0x4DC0, 0x4C80, 0x8C41,
+    0x4400, 0x84C1, 0x8581, 0x4540, 0x8701, 0x47C0, 0x4680, 0x8641,
+    0x8201, 0x42C0, 0x4380, 0x8341, 0x4100, 0x81C1, 0x8081, 0x4040
+)
 
 
 def decode_ch5_mode(ch5_pwm: int):
     """
-    Decodes CH5 PWM into (mode_number: int, roll_on: bool, mode_name: str)
+    Decodes CH5 PWM into (mode_number: int, flaperon_on: bool, mode_name: str)
     SWC (Pos 1, 2, 3) + SWB (OFF, ON) medido e calibrado:
-      SWC 1 + SWB OFF: ~1166 us -> Mode 1 + Roll OFF (100% Manual Direto)
-      SWC 2 + SWB OFF: ~1328 us -> Mode 2 (FBW Fixo) + Roll OFF (Pitch FBW + Roll Manual)
-      SWC 3 + SWB OFF: ~1411 us -> Mode 3 (ESC PI-D) + Roll OFF (Pitch ESC + Roll Manual)
-      SWC 1 + SWB ON:  ~1541 us -> Mode 1 + Roll ON  (Manual + Roll Assist)
-      SWC 2 + SWB ON:  ~1825 us -> Mode 2 (FBW Fixo) + Roll ON  (Pitch & Roll FBW Fixo)
-      SWC 3 + SWB ON:  ~1942 us -> Mode 3 (ESC PI-D) + Roll ON  (Pitch & Roll ESC PI-D)
+      SWC 1 + SWB OFF: ~1166 us -> Modo 1 + Flaperons OFF (Pitch Manual + Roll Assist)
+      SWC 2 + SWB OFF: ~1328 us -> Modo 2 (FBW Fixo) + Flaperons OFF (Pitch & Roll FBW Fixo)
+      SWC 3 + SWB OFF: ~1411 us -> Modo 3 (ESC PI-D) + Flaperons OFF (Pitch & Roll ESC PI-D)
+      SWC 1 + SWB ON:  ~1541 us -> Modo 1 + Flaperons ON  (Pitch Manual + Roll Assist + Flaps 15 deg DOWN)
+      SWC 2 + SWB ON:  ~1825 us -> Modo 2 (FBW Fixo) + Flaperons ON  (Pitch & Roll FBW Fixo + Flaps 15 deg DOWN)
+      SWC 3 + SWB ON:  ~1942 us -> Modo 2 (Auto Flap-Safe) + Flaperons ON (Safety: Modo 3 demoted to 2)
     """
     if ch5_pwm < 1247:
-        return 1, False, "Modo 1 + Roll OFF"
+        return 1, False, "Modo 1 + Flaperons OFF"
     elif ch5_pwm < 1370:
-        return 2, False, "Modo 2 (FBW Fixo) + Roll OFF"
+        return 2, False, "Modo 2 (FBW Fixo) + Flaperons OFF"
     elif ch5_pwm < 1476:
-        return 3, False, "Modo 3 (ESC PI-D) + Roll OFF"
+        return 3, False, "Modo 3 (ESC PI-D) + Flaperons OFF"
     elif ch5_pwm < 1683:
-        return 1, True, "Modo 1 + Roll ON"
+        return 1, True, "Modo 1 + Flaperons ON"
     elif ch5_pwm < 1884:
-        return 2, True, "Modo 2 (FBW Fixo) + Roll ON"
+        return 2, True, "Modo 2 (FBW Fixo) + Flaperons ON"
     else:
-        return 3, True, "Modo 3 (ESC PI-D) + Roll ON"
+        # Rule: When flaperons are ON, Mode 3 cannot be active -> Auto-demoted to Mode 2!
+        return 2, True, "Modo 2 (Auto Flap-Safe) + Flaperons ON"
 
 
 def calculate_crc16(data: bytes) -> int:
     crc = 0xFFFF
     for byte in data:
-        crc ^= byte
-        for _ in range(8):
-            if crc & 0x0001:
-                crc = (crc >> 1) ^ 0xA001
-            else:
-                crc >>= 1
+        crc = (crc >> 8) ^ CRC16_TABLE[(crc ^ byte) & 0xFF]
     return crc
 
 
@@ -81,6 +128,8 @@ def encode_telemetry(
     servo_fl: int = 1500,
     esc_throttle: int = 1000,
     is_assist_mode: bool = False,
+    flaperon_active: bool = False,
+    roll_active: bool = False,
     is_low_volt: bool = False,
     is_esc_active: bool = False,
     flight_mode: int = 1,
@@ -156,14 +205,15 @@ def encode_telemetry(
         crc = calculate_crc16(payload_without_crc)
         return payload_without_crc + struct.pack("<H", crc)
 
-    if packet_format == "49B":
+    if legacy_format or packet_format == "49B":
         pitch_x10 = int(round(pitch * 10))
         roll_x10 = int(round(roll * 10))
         bat_x100 = int(round(battery_v * 100))
         alt_x10 = int(round(alt * 10))
+        assist_flag = is_assist_mode or flaperon_active or roll_active
         flags = (
             (1 if rc_signal_lost else 0) |
-            (2 if is_assist_mode else 0) |
+            (2 if assist_flag else 0) |
             (4 if is_low_volt else 0) |
             (8 if is_esc_active else 0)
         )
@@ -194,9 +244,10 @@ def encode_telemetry(
         lat_e7 = int(round(lat * 1e7))
         lon_e7 = int(round(lon * 1e7))
         gps_alt_x10 = int(round(gps_alt * 10))
+        assist_flag = is_assist_mode or flaperon_active or roll_active
         flags = (
             (1 if rc_signal_lost else 0) |
-            (2 if is_assist_mode else 0) |
+            (2 if assist_flag else 0) |
             (4 if is_low_volt else 0)
         )
         header = b"MT"
@@ -228,9 +279,10 @@ def encode_telemetry(
     roll_x10 = int(round(roll * 10))
     bat_x100 = int(round(battery_v * 100))
     alt_x10 = int(round(alt * 10))
+    assist_flag = is_assist_mode or flaperon_active or roll_active
     flags = (
         (1 if rc_signal_lost else 0) |
-        (2 if is_assist_mode else 0) |
+        (2 if assist_flag else 0) |
         (4 if is_low_volt else 0) |
         (8 if is_esc_active else 0)
     )
@@ -275,7 +327,7 @@ def decode_telemetry(packet_bytes: bytes) -> dict | None:
     if header != b"MT":
         return None
 
-    received_crc = struct.unpack("<H", packet_bytes[-2:])[0]
+    received_crc = STRUCT_CRC.unpack(packet_bytes[-2:])[0]
     computed_crc = calculate_crc16(packet_bytes[:-2])
     if received_crc != computed_crc:
         return None
@@ -284,12 +336,12 @@ def decode_telemetry(packet_bytes: bytes) -> dict | None:
         # Check if legacy GPS packet (valid GPS fix/sats with non-zero lat/lon coordinates and zero reserved byte)
         is_gps_packet = False
         if packet_bytes[58] == 0 and packet_bytes[57] <= 15 and packet_bytes[56] <= 2 and packet_bytes[55] <= 32:
-            unpacked_gps = struct.unpack(PACKET_FORMAT_61B_GPS, packet_bytes)
+            unpacked_gps = STRUCT_61B_GPS.unpack(packet_bytes)
             if unpacked_gps[22] != 0 or unpacked_gps[23] != 0:
                 is_gps_packet = True
 
         if is_gps_packet:
-            unpacked = struct.unpack(PACKET_FORMAT_61B_GPS, packet_bytes)
+            unpacked = STRUCT_61B_GPS.unpack(packet_bytes)
             pkt_seq = unpacked[1]
             timestamp_ms = unpacked[2]
             pitch = round(unpacked[3] / 10.0, 1)
@@ -361,6 +413,10 @@ def decode_telemetry(packet_bytes: bytes) -> dict | None:
                 "is_assist_mode": assist_m,
                 "rollActive": assist_m,
                 "roll_active": assist_m,
+                "flaperonActive": assist_m,
+                "flaperon_active": assist_m,
+                "flapsActive": assist_m,
+                "flaps_active": assist_m,
                 "isLowVolt": low_v,
                 "is_low_volt": low_v,
                 "isEscActive": esc_active,
@@ -376,7 +432,7 @@ def decode_telemetry(packet_bytes: bytes) -> dict | None:
                 "packet_size": 61
             }
 
-        unpacked = struct.unpack(PACKET_FORMAT_PID, packet_bytes)
+        unpacked = STRUCT_PID.unpack(packet_bytes)
         pkt_seq = unpacked[1]
         timestamp_ms = unpacked[2]
         pitch = round(unpacked[3] / 10.0, 1)
@@ -446,6 +502,10 @@ def decode_telemetry(packet_bytes: bytes) -> dict | None:
             "is_assist_mode": assist_m,
             "rollActive": assist_m,
             "roll_active": assist_m,
+            "flaperonActive": assist_m,
+            "flaperon_active": assist_m,
+            "flapsActive": assist_m,
+            "flaps_active": assist_m,
             "isLowVolt": low_v,
             "is_low_volt": low_v,
             "isEscActive": esc_active,
@@ -462,7 +522,7 @@ def decode_telemetry(packet_bytes: bytes) -> dict | None:
         }
 
     elif len(packet_bytes) == 49:
-        unpacked = struct.unpack(PACKET_FORMAT_49B, packet_bytes)
+        unpacked = STRUCT_49B.unpack(packet_bytes)
         pkt_seq = unpacked[1]
         timestamp_ms = unpacked[2]
         pitch = round(unpacked[3] / 10.0, 1)
@@ -527,6 +587,10 @@ def decode_telemetry(packet_bytes: bytes) -> dict | None:
             "is_assist_mode": assist_m,
             "rollActive": assist_m,
             "roll_active": assist_m,
+            "flaperonActive": assist_m,
+            "flaperon_active": assist_m,
+            "flapsActive": assist_m,
+            "flaps_active": assist_m,
             "isLowVolt": low_v,
             "is_low_volt": low_v,
             "isEscActive": esc_active,
@@ -543,7 +607,7 @@ def decode_telemetry(packet_bytes: bytes) -> dict | None:
         }
 
     elif len(packet_bytes) == 33:
-        unpacked = struct.unpack(PACKET_FORMAT_4CH, packet_bytes)
+        unpacked = STRUCT_4CH.unpack(packet_bytes)
         flags = unpacked[15]
         rc1, rc2, rc3, rc5 = unpacked[9], unpacked[10], unpacked[11], unpacked[12]
         bat_v = round(unpacked[13] / 100.0, 2)
@@ -588,7 +652,7 @@ def decode_telemetry(packet_bytes: bytes) -> dict | None:
             "packet_size": 33
         }
     elif len(packet_bytes) == 31:
-        unpacked = struct.unpack(PACKET_FORMAT_3CH, packet_bytes)
+        unpacked = STRUCT_3CH.unpack(packet_bytes)
         flags = unpacked[14]
         rc1, rc2, rc3 = unpacked[9], unpacked[10], unpacked[11]
         bat_v = round(unpacked[12] / 100.0, 2)
@@ -633,7 +697,7 @@ def decode_telemetry(packet_bytes: bytes) -> dict | None:
             "packet_size": 31
         }
     elif len(packet_bytes) == 35:
-        unpacked = struct.unpack(PACKET_FORMAT_5CH, packet_bytes)
+        unpacked = STRUCT_5CH.unpack(packet_bytes)
         flags = unpacked[16]
         rc1, rc2, rc3, rc4, rc5 = unpacked[9], unpacked[10], unpacked[11], unpacked[12], unpacked[13]
         bat_v = round(unpacked[14] / 100.0, 2)

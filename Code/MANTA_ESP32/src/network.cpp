@@ -71,7 +71,7 @@ void sendTelemetry(
     uint16_t srvBR, uint16_t srvBL, uint16_t srvFR, uint16_t srvFL, uint16_t escThrot,
     float batteryVoltage, float alt,
     bool rcSignalLost,
-    bool isAssistMode,
+    bool flaperonActive,
     bool isLowVolt,
     bool isEscActive,
     uint8_t flightMode,
@@ -91,7 +91,7 @@ void sendTelemetry(
   }
 
   uint8_t flags = (rcSignalLost ? 0x01 : 0) |
-                  (isAssistMode ? 0x02 : 0) |
+                  (flaperonActive ? 0x02 : 0) |
                   (isLowVolt ? 0x04 : 0) |
                   (isEscActive ? 0x08 : 0);
 

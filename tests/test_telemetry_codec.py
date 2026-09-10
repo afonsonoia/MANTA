@@ -449,7 +449,7 @@ def test_flight_loggers_include_pid_and_mode_headers(tmp_path):
     logger = TelemetryCSVLogger(str(csv_path))
     assert logger.start()
 
-    expected_csv_cols = ["flight_mode", "esc_active", "pitch_kp", "pitch_ki", "pitch_kd", "roll_kp", "roll_ki", "roll_kd"]
+    expected_csv_cols = ["flight_mode", "esc_active", "flaperon_active", "pitch_kp", "pitch_ki", "pitch_kd", "roll_kp", "roll_ki", "roll_kd"]
     with open(logger.file_path, "r", encoding="utf-8") as f:
         csv_header = f.readline().strip().split(",")
     for col in expected_csv_cols:
@@ -457,7 +457,70 @@ def test_flight_loggers_include_pid_and_mode_headers(tmp_path):
     logger.stop()
 
     mp_logger = AsyncTelemetryLogger(str(tmp_path / "test_mp_flight_log.csv"))
-    expected_mp_cols = ["Flight Mode", "ESC Active", "Pitch Kp", "Pitch Ki", "Pitch Kd", "Roll Kp", "Roll Ki", "Roll Kd"]
+    expected_mp_cols = ["Flight Mode", "ESC Active", "Flaperons Active", "Pitch Kp", "Pitch Ki", "Pitch Kd", "Roll Kp", "Roll Ki", "Roll Kd"]
     for col in expected_mp_cols:
         assert col in mp_logger.headers, f"AsyncTelemetryLogger header missing '{col}'!"
+
+
+def test_flaperon_telemetry_and_logging():
+    """Verifies that Flaperons Active state (Bit 1) is cleanly encoded, decoded, and logged across subsystems."""
+    # Test 1: Flaperons ON (Bit 1 = 1)
+    pkt_on = encode_telemetry(
+        pitch=5.0, roll=-2.0,
+        accel_x=0, accel_y=0, accel_z=-4000,
+        gyro_x=0, gyro_y=0, gyro_z=0,
+        rc1=1500, rc2=1500, rc3=1200, rc5=1530,  # Mode 2 + Flaperons ON
+        flaperon_active=True,
+        flight_mode=2
+    )
+    dec_on = decode_telemetry(pkt_on)
+    assert dec_on is not None
+    assert dec_on["flaperonActive"] is True
+    assert dec_on["flaperon_active"] is True
+    assert dec_on["flapsActive"] is True
+    assert dec_on["flightMode"] == 2
+
+    # Test 2: Flaperons OFF (Bit 1 = 0)
+    pkt_off = encode_telemetry(
+        pitch=5.0, roll=-2.0,
+        accel_x=0, accel_y=0, accel_z=-4000,
+        gyro_x=0, gyro_y=0, gyro_z=0,
+        rc1=1500, rc2=1500, rc3=1200, rc5=1400,  # Mode 2 + Flaperons OFF
+        flaperon_active=False,
+        flight_mode=2
+    )
+    dec_off = decode_telemetry(pkt_off)
+    assert dec_off is not None
+    assert dec_off["flaperonActive"] is False
+    assert dec_off["flaperon_active"] is False
+    assert dec_off["flapsActive"] is False
+    assert dec_off["flightMode"] == 2
+
+
+def test_crc16_lut_equivalence():
+    """Validates that the optimized CRC16 lookup table produces 100% identical checksums compared to reference bit-by-bit calculation."""
+    def reference_crc16(data: bytes) -> int:
+        crc = 0xFFFF
+        for byte in data:
+            crc ^= byte
+            for _ in range(8):
+                if crc & 0x0001:
+                    crc = (crc >> 1) ^ 0xA001
+                else:
+                    crc >>= 1
+        return crc
+
+    # Test edge cases: empty, single byte, all zeros, all 0xFF, full 59-byte packets
+    assert calculate_crc16(b"") == reference_crc16(b"")
+    assert calculate_crc16(b"\x00") == reference_crc16(b"\x00")
+    assert calculate_crc16(b"\xFF" * 59) == reference_crc16(b"\xFF" * 59)
+    assert calculate_crc16(b"MT\x01\x02\x03\x04\x05") == reference_crc16(b"MT\x01\x02\x03\x04\x05")
+
+    # Test 200 random byte sequences of various lengths
+    random.seed(42)
+    for _ in range(200):
+        test_payload = bytes(random.randint(0, 255) for _ in range(random.randint(1, 100)))
+        assert calculate_crc16(test_payload) == reference_crc16(test_payload), "CRC LUT mismatch with reference algorithm!"
+
+
 

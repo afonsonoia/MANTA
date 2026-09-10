@@ -67,6 +67,7 @@ class FileAnalysisResult:
     pitch_result: AxisPIDResult
     roll_result: AxisPIDResult
     overall_confidence: float
+    flaperon_active_pct: float = 0.0
 
 
 def classify_confidence_tier(conf_pct: float) -> str:
@@ -130,7 +131,7 @@ def identify_transfer_function(u: np.ndarray, y: np.ndarray, rate: np.ndarray, d
 def synthesize_pid(k_rate: float, tau: float, is_pitch: bool = True) -> Tuple[float, float, float, float, float, float]:
     """
     Calcula ganhos de PID teóricos para controlo de atitude em loop fechado.
-    Entrada: erro em graus (°), Saída: correção em microssegundos (us, span ±222us).
+    Entrada: erro em graus (°), Saída: correção em microssegundos (us, span ±278us).
     """
     k_abs = max(abs(k_rate), 0.01)
 
@@ -156,7 +157,7 @@ def synthesize_pid(k_rate: float, tau: float, is_pitch: bool = True) -> Tuple[fl
     kd_agile = kp_agile * td_agile
 
     # Limites de saturação razoáveis para atuadores de 1000-2000us
-    # Erro de 20 deg não deve saturar instantaneamente o servo (+-222us)
+    # Erro de 25 deg não deve saturar instantaneamente o servo (+-278us)
     kp_imc = float(np.clip(kp_imc, 0.5, 15.0))
     ki_imc = float(np.clip(ki_imc, 0.05, 5.0))
     kd_imc = float(np.clip(kd_imc, 0.01, 1.5))
@@ -285,10 +286,34 @@ def analyze_csv_file(filepath: str, folder_name: str) -> Optional[FileAnalysisRe
     pitch_data = df[pitch_col].values.astype(float) if pitch_col else np.zeros(len(df))
     roll_data = df[roll_col].values.astype(float) if roll_col else np.zeros(len(df))
 
+    # Auto-deteção de alinhamento físico dos eixos de giroscópio (MANTA PCB possui MPU6050 rodado a -90°)
+    dp_dt = np.gradient(pitch_data, dt_med) if dt_med > 0 else np.zeros(len(pitch_data))
+    dr_dt = np.gradient(roll_data, dt_med) if dt_med > 0 else np.zeros(len(roll_data))
+
+    gyro_pitch_col = gy_col
+    gyro_roll_col = gx_col
+
+    if gx_col and gy_col and len(df) > 30 and (np.std(dp_dt) > 0.3 or np.std(dr_dt) > 0.3):
+        gx_vals = df[gx_col].values.astype(float)
+        gy_vals = df[gy_col].values.astype(float)
+        c_gx_dp = abs(np.corrcoef(gx_vals, dp_dt)[0, 1]) if np.std(gx_vals) > 0 and np.std(dp_dt) > 0 else 0.0
+        c_gy_dp = abs(np.corrcoef(gy_vals, dp_dt)[0, 1]) if np.std(gy_vals) > 0 and np.std(dp_dt) > 0 else 0.0
+        if c_gx_dp > c_gy_dp:
+            # Orientação física MANTA PCB: Gyro X = Taxa de Pitch, Gyro Y = Taxa de Roll
+            gyro_pitch_col = gx_col
+            gyro_roll_col = gy_col
+
     # Análise de Pitch
     if srv_pitch_col and pitch_col:
         u_p = df[srv_pitch_col].values.astype(float) - 1500.0
-        q = df[gy_col].values.astype(float) / 32.8 if gy_col else np.gradient(pitch_data, dt_med)
+        if gyro_pitch_col:
+            q_raw = df[gyro_pitch_col].values.astype(float) / 32.8
+            # Inverte sinal se giroscópio estiver em fase negativa com a derivada de pitch
+            if np.std(q_raw) > 0 and np.std(dp_dt) > 0 and np.corrcoef(q_raw, dp_dt)[0, 1] < 0:
+                q_raw = -q_raw
+            q = q_raw
+        else:
+            q = dp_dt
         k_p, tau_p, wn_p, z_p, r2_p, fit_p = identify_transfer_function(u_p, pitch_data, q, dt_med)
 
         # Fator de excitação (sinal de stick vs ruído)
@@ -323,7 +348,13 @@ def analyze_csv_file(filepath: str, folder_name: str) -> Optional[FileAnalysisRe
     # Análise de Roll
     if srv_roll_col and roll_col:
         u_r = df[srv_roll_col].values.astype(float) - 1500.0
-        p = df[gx_col].values.astype(float) / 32.8 if gx_col else np.gradient(roll_data, dt_med)
+        if gyro_roll_col:
+            p_raw = df[gyro_roll_col].values.astype(float) / 32.8
+            if np.std(p_raw) > 0 and np.std(dr_dt) > 0 and np.corrcoef(p_raw, dr_dt)[0, 1] < 0:
+                p_raw = -p_raw
+            p = p_raw
+        else:
+            p = dr_dt
         k_r, tau_r, wn_r, z_r, r2_r, fit_r = identify_transfer_function(u_r, roll_data, p, dt_med)
 
         u_std = np.std(u_r)
@@ -355,6 +386,16 @@ def analyze_csv_file(filepath: str, folder_name: str) -> Optional[FileAnalysisRe
 
     overall_conf = round((pitch_res.confidence_percentage + roll_res.confidence_percentage) / 2.0, 1)
 
+    # Deteta percentagem de voo com Flaperons (+10° DOWN) ativos
+    flap_col = next((c for c in cols if "flaperon" in c.lower() or "flaps" in c.lower() or "assist" in c.lower()), None)
+    flaperon_pct = 0.0
+    if flap_col:
+        try:
+            flap_vals = df[flap_col].values.astype(float)
+            flaperon_pct = round(float(np.mean(flap_vals > 0) * 100.0), 1)
+        except Exception:
+            flaperon_pct = 0.0
+
     return FileAnalysisResult(
         filename=os.path.basename(filepath),
         filepath=filepath,
@@ -364,7 +405,8 @@ def analyze_csv_file(filepath: str, folder_name: str) -> Optional[FileAnalysisRe
         sample_rate_hz=round(sample_rate_hz, 1),
         pitch_result=pitch_res,
         roll_result=roll_res,
-        overall_confidence=overall_conf
+        overall_confidence=overall_conf,
+        flaperon_active_pct=flaperon_pct
     )
 
 
@@ -426,7 +468,8 @@ def aggregate_folder_results(folder_name: str, file_results: List[FileAnalysisRe
             "confidence_tier": classify_confidence_tier(r_conf)
         },
         "overall_confidence": overall_conf,
-        "overall_confidence_tier": classify_confidence_tier(overall_conf)
+        "overall_confidence_tier": classify_confidence_tier(overall_conf),
+        "flaperon_active_pct": round(float(np.mean([r.flaperon_active_pct for r in file_results])), 1)
     }
 
 
@@ -446,6 +489,8 @@ def print_folder_summary(agg: Dict):
 
     print(f"  Grau Geral de Confiança: {agg['overall_confidence']}% - [{agg['overall_confidence_tier']}]")
     print(f"  Ficheiros: {', '.join(agg['files'])}")
+    if agg.get("flaperon_active_pct", 0.0) > 0.0:
+        print(f"  Flaperons (10° DOWN): Ativos em {agg['flaperon_active_pct']}% das amostras do voo")
     print()
 
     # Pitch
@@ -523,9 +568,12 @@ def generate_plots(all_file_results: Dict[str, List[FileAnalysisResult]], output
         res = results[0]  # primeiro ficheiro representativo
         try:
             df = pd.read_csv(res.filepath)
-            t = np.arange(min(300, len(df))) * (1.0 / res.sample_rate_hz)
-            p_meas = df["Pitch (deg)"].values[:len(t)] if "Pitch (deg)" in df else np.zeros(len(t))
-            r_meas = df["Roll (deg)"].values[:len(t)] if "Roll (deg)" in df else np.zeros(len(t))
+            sample_rate = res.sample_rate_hz if res.sample_rate_hz > 0 else 20.0
+            t = np.arange(min(300, len(df))) * (1.0 / sample_rate)
+            pitch_col = next((c for c in df.columns if "pitch" in c.lower() and "rc" not in c.lower() and "servo" not in c.lower()), None)
+            roll_col = next((c for c in df.columns if "roll" in c.lower() and "rc" not in c.lower() and "servo" not in c.lower()), None)
+            p_meas = df[pitch_col].values[:len(t)] if pitch_col else np.zeros(len(t))
+            r_meas = df[roll_col].values[:len(t)] if roll_col else np.zeros(len(t))
 
             ax_p.plot(t, p_meas, label=f"Pitch Real ({res.filename[:18]}...)", color="royalblue", lw=1.5)
             ax_p.set_title(f"{row_title} - Pitch (Conf: {res.pitch_result.confidence_percentage}%)", fontsize=10, fontweight="bold")

@@ -73,7 +73,7 @@ class TelemetryCSVLogger:
                 "satellites",
                 "gps_fix_type",
                 "rc_signal_lost",
-                "assist_mode_active",
+                "flaperon_active",
                 "flight_mode",
                 "esc_active",
                 "pitch_kp",
@@ -111,7 +111,7 @@ class TelemetryCSVLogger:
         ch1 = rc[0] if len(rc) > 0 else 0
         ch2 = rc[1] if len(rc) > 1 else 0
         ch3 = rc[2] if len(rc) > 2 else 0
-        ch5 = rc[3] if len(rc) > 3 else (rc[4] if len(rc) > 4 else 0)
+        ch5 = telemetry_dict.get("rc5", rc[4] if len(rc) > 4 else (rc[3] if len(rc) > 3 else 0))
 
         row = [
             iso_ts,
@@ -143,7 +143,7 @@ class TelemetryCSVLogger:
             telemetry_dict.get("satellites", telemetry_dict.get("sats", 0)),
             telemetry_dict.get("fix_type", telemetry_dict.get("fixType", 0)),
             1 if telemetry_dict.get("rcSignalLost", False) else 0,
-            1 if telemetry_dict.get("isAssistMode", False) else 0,
+            1 if telemetry_dict.get("flaperon_active", telemetry_dict.get("flaperonActive", telemetry_dict.get("isAssistMode", False))) else 0,
             telemetry_dict.get("flight_mode", telemetry_dict.get("flightMode", 1)),
             1 if telemetry_dict.get("isEscActive", telemetry_dict.get("is_esc_active", False)) else 0,
             telemetry_dict.get("pitch_kp", telemetry_dict.get("pitchKp", 9.35)),
