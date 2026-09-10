@@ -1,9 +1,11 @@
 """
-Test suite validating code audit fixes, formula polarities, and kinematic safety:
-1. Soft power floor vs hard emergency cutoff consistency under low voltage.
+Test suite validating avionics flight safety, failsafes, and SysID sensor alignment:
+1. Low voltage soft power floor (1350us) vs hard emergency cutoff policy.
 2. Auto-detection and correlation alignment of gyro axes in SysID for -90° PCB mounting.
-3. Negative feedback polarity and rate damping signs for V-Tail and Rollerons.
-4. Servo boundary compliance under simultaneous Pitch, Roll and Flaperon deflection.
+3. Negative feedback stability and rate damping polarities for V-Tail and Rollerons.
+4. Flaperons dynamic headroom anti-saturation and hardware bounds [1000, 2000] us.
+5. CH5 EMI hysteresis debounce timing and noise rejection.
+6. Bumpless mode transfer, flaperon anti-learning safety rule, and cascaded failsafes.
 """
 
 import math
@@ -12,8 +14,8 @@ import pytest
 from pathlib import Path
 
 
-class TestAuditFixes:
-    """Verifies that all audited fixes and formula polarities function correctly and safely."""
+class TestFlightSafetyAndSysID:
+    """Verifies all safety failsafes, kinematics boundaries, and SysID calibration logic."""
 
     def test_low_voltage_soft_ceiling_policy(self):
         """Validates that setThrottlePulse respects the soft power ceiling (1350us) to maintain flight during low voltage."""

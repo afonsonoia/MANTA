@@ -1,4 +1,4 @@
-name: MANTA CI/CD - Ground Truth Verification
+name: MANTA Avionics CI/CD Pipeline
 
 on:
   push:
@@ -7,8 +7,8 @@ on:
     branches: [ '**' ]
 
 jobs:
-  test-voltage-accuracy:
-    name: Validate ESP32 Voltage Formula vs Multimeter Ground Truth
+  avionics-verification:
+    name: MANTA Automated Verification & Test Suite
     runs-on: ubuntu-latest
 
     steps:
@@ -33,7 +33,26 @@ jobs:
           python -m pip install --upgrade pip
           pip install pytest openpyxl platformio pyserial
 
-      - name: Run CI/CD Compilation and Accuracy Test Suite
+      - name: 1. Firmware & Ground Station Compilation
+        run: |
+          python -m pytest tests/test_compilation.py -v
+
+      - name: 2. Fly-By-Wire Control, PI-D & Flaperon Kinematics
+        run: |
+          python -m pytest tests/test_fbw_pid_control.py tests/test_ch5_calibration_midpoints.py -v
+
+      - name: 3. Simplex Telemetry Codec & Protocols
+        run: |
+          python -m pytest tests/test_telemetry_codec.py tests/test_ground_station_buzzer.py -v
+
+      - name: 4. Flight Safety, Failsafes & SysID Alignment
+        run: |
+          python -m pytest tests/test_flight_safety_and_sysid.py -v
+
+      - name: 5. Sensor Calibration & Ground Truth Validation
+        run: |
+          python -m pytest tests/test_voltage_sensor.py tests/test_imu_quality.py -v
+
+      - name: Full CI/CD Suite Runner Summary
         run: |
           python run_tests.py
-
