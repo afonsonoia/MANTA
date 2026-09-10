@@ -7,7 +7,7 @@ Test suite validating code audit fixes, formula polarities, and kinematic safety
 """
 
 import math
-import numpy as np
+import random
 import pytest
 from pathlib import Path
 
@@ -45,27 +45,51 @@ class TestAuditFixes:
     def test_sysid_gyro_axis_autodetection_for_manta_pcb(self):
         """Validates that SysID correctly detects the -90° PCB mounting and aligns Gyro X to Pitch and Gyro Y to Roll."""
         dt = 0.05
-        t = np.linspace(0, 10, 200)
+        n_samples = 200
+        t = [i * 10.0 / (n_samples - 1) for i in range(n_samples)]
 
         # Simulated flight dynamics:
         # Pitch oscillation at 0.5 Hz
-        pitch = 5.0 * np.sin(2 * np.pi * 0.5 * t)
+        pitch = [5.0 * math.sin(2.0 * math.pi * 0.5 * ti) for ti in t]
         # Roll oscillation at 0.8 Hz
-        roll = 15.0 * np.sin(2 * np.pi * 0.8 * t)
+        roll = [15.0 * math.sin(2.0 * math.pi * 0.8 * ti) for ti in t]
 
-        dp_dt = np.gradient(pitch, dt)
-        dr_dt = np.gradient(roll, dt)
+        # Central difference numerical gradient
+        dp_dt = []
+        dr_dt = []
+        for i in range(n_samples):
+            if i == 0:
+                dp_dt.append((pitch[1] - pitch[0]) / dt)
+                dr_dt.append((roll[1] - roll[0]) / dt)
+            elif i == n_samples - 1:
+                dp_dt.append((pitch[-1] - pitch[-2]) / dt)
+                dr_dt.append((roll[-1] - roll[-2]) / dt)
+            else:
+                dp_dt.append((pitch[i + 1] - pitch[i - 1]) / (2.0 * dt))
+                dr_dt.append((roll[i + 1] - roll[i - 1]) / (2.0 * dt))
 
         # On MANTA PCB (-90° rotation):
         # Gyro X measures -dp/dt * 32.8 (negative correlation)
         # Gyro Y measures +dr/dt * 32.8 (positive correlation)
-        gx = -dp_dt * 32.8 + np.random.normal(0, 2, len(t))
-        gy = dr_dt * 32.8 + np.random.normal(0, 2, len(t))
+        rng = random.Random(42)
+        gx = [-dp * 32.8 + rng.gauss(0, 1.5) for dp in dp_dt]
+        gy = [dr * 32.8 + rng.gauss(0, 1.5) for dr in dr_dt]
 
-        c_gx_dp = abs(np.corrcoef(gx, dp_dt)[0, 1])
-        c_gy_dp = abs(np.corrcoef(gy, dp_dt)[0, 1])
-        c_gx_dr = abs(np.corrcoef(gx, dr_dt)[0, 1])
-        c_gy_dr = abs(np.corrcoef(gy, dr_dt)[0, 1])
+        def corrcoef(x, y):
+            n = len(x)
+            mx = sum(x) / n
+            my = sum(y) / n
+            cov = sum((xi - mx) * (yi - my) for xi, yi in zip(x, y))
+            var_x = sum((xi - mx) ** 2 for xi in x)
+            var_y = sum((yi - my) ** 2 for yi in y)
+            if var_x <= 0 or var_y <= 0:
+                return 0.0
+            return cov / math.sqrt(var_x * var_y)
+
+        c_gx_dp = abs(corrcoef(gx, dp_dt))
+        c_gy_dp = abs(corrcoef(gy, dp_dt))
+        c_gx_dr = abs(corrcoef(gx, dr_dt))
+        c_gy_dr = abs(corrcoef(gy, dr_dt))
 
         # Verify auto-detection selects Gyro X for Pitch and Gyro Y for Roll
         detected_pitch_gyro = "gx" if c_gx_dp > c_gy_dp else "gy"
@@ -75,16 +99,16 @@ class TestAuditFixes:
         assert detected_roll_gyro == "gy", "SysID auto-detection should identify Gyro Y as Roll rate on MANTA PCB"
 
         # Verify sign alignment:
-        q_raw = gx / 32.8
-        if np.corrcoef(q_raw, dp_dt)[0, 1] < 0:
-            q_raw = -q_raw
+        q_raw = [g / 32.8 for g in gx]
+        if corrcoef(q_raw, dp_dt) < 0:
+            q_raw = [-q for q in q_raw]
 
-        p_raw = gy / 32.8
-        if np.corrcoef(p_raw, dr_dt)[0, 1] < 0:
-            p_raw = -p_raw
+        p_raw = [g / 32.8 for g in gy]
+        if corrcoef(p_raw, dr_dt) < 0:
+            p_raw = [-p for p in p_raw]
 
-        assert np.corrcoef(q_raw, dp_dt)[0, 1] > 0.95, "Corrected Pitch rate must correlate positively with dPitch/dt"
-        assert np.corrcoef(p_raw, dr_dt)[0, 1] > 0.95, "Corrected Roll rate must correlate positively with dRoll/dt"
+        assert corrcoef(q_raw, dp_dt) > 0.95, "Corrected Pitch rate must correlate positively with dPitch/dt"
+        assert corrcoef(p_raw, dr_dt) > 0.95, "Corrected Roll rate must correlate positively with dRoll/dt"
 
     def test_vtail_negative_feedback_pitch_polarity(self):
         """Validates that pitchPidOut generates strictly negative feedback for V-Tail elevator kinematics."""
@@ -392,19 +416,17 @@ class TestAuditFixes:
 
     def test_sysid_plot_column_resolution(self):
         """Validates that plot generation dynamically identifies pitch and roll columns across multiple CSV schema variants."""
-        import pandas as pd
-
         # Schema 1: Mission Planner format: "RC2 Pitch (us)", "Pitch (deg)", "Roll (deg)", "Servo FR (us)"
-        df1 = pd.DataFrame({"RC2 Pitch (us)": [1500, 1520], "Pitch (deg)": [1.0, 2.0], "Roll (deg)": [-3.0, -4.0], "Servo FR (us)": [1500, 1500]})
-        pitch_col1 = next((c for c in df1.columns if "pitch" in c.lower() and "rc" not in c.lower() and "servo" not in c.lower()), None)
-        roll_col1 = next((c for c in df1.columns if "roll" in c.lower() and "rc" not in c.lower() and "servo" not in c.lower()), None)
+        cols1 = ["RC2 Pitch (us)", "Pitch (deg)", "Roll (deg)", "Servo FR (us)"]
+        pitch_col1 = next((c for c in cols1 if "pitch" in c.lower() and "rc" not in c.lower() and "servo" not in c.lower()), None)
+        roll_col1 = next((c for c in cols1 if "roll" in c.lower() and "rc" not in c.lower() and "servo" not in c.lower()), None)
         assert pitch_col1 == "Pitch (deg)", "Must match Pitch (deg) without picking RC2 Pitch (us)"
         assert roll_col1 == "Roll (deg)"
 
         # Schema 2: Telemetry CSV Logger format: "rc2_pitch_pwm", "pitch_deg", "roll_deg", "rc1_roll_pwm"
-        df2 = pd.DataFrame({"rc2_pitch_pwm": [1500, 1500], "pitch_deg": [1.0, 2.0], "roll_deg": [-3.0, -4.0], "rc1_roll_pwm": [1500, 1500]})
-        pitch_col2 = next((c for c in df2.columns if "pitch" in c.lower() and "rc" not in c.lower() and "servo" not in c.lower()), None)
-        roll_col2 = next((c for c in df2.columns if "roll" in c.lower() and "rc" not in c.lower() and "servo" not in c.lower()), None)
+        cols2 = ["rc2_pitch_pwm", "pitch_deg", "roll_deg", "rc1_roll_pwm"]
+        pitch_col2 = next((c for c in cols2 if "pitch" in c.lower() and "rc" not in c.lower() and "servo" not in c.lower()), None)
+        roll_col2 = next((c for c in cols2 if "roll" in c.lower() and "rc" not in c.lower() and "servo" not in c.lower()), None)
         assert pitch_col2 == "pitch_deg", "Must match pitch_deg without picking rc2_pitch_pwm"
         assert roll_col2 == "roll_deg", "Must match roll_deg without getting confused with rc1_roll_pwm"
 
