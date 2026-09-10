@@ -1,0 +1,18 @@
+[Unit]
+Description=MANTA UAV Dual-Mode Autonomous Boot Manager (Dev vs Flight)
+After=network.target NetworkManager.service
+Wants=network.target
+
+[Service]
+Type=simple
+User=pc
+WorkingDirectory=/home/pc/MANTA/Code/MANTA_PI
+ExecStart=/bin/bash /home/pc/MANTA/Code/MANTA_PI/manta_boot.sh
+Restart=no
+KillSignal=SIGINT
+TimeoutStopSec=5s
+StandardOutput=journal+console
+StandardError=journal+console
+
+[Install]
+WantedBy=multi-user.target
