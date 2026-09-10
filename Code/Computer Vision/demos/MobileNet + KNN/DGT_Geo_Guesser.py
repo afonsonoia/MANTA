@@ -77,7 +77,7 @@ inputs = tf.keras.Input(shape=(224, 224, 3))
 x = base_model(inputs, training=False)
 outputs = tf.keras.layers.GlobalAveragePooling2D()(x)
 extractor = tf.keras.Model(inputs, outputs)
-print("✅ Brain optimized and ready to fly.")
+print("[OK] Brain optimized and ready to fly.")
 
 
 def apply_clahe_filter(img):

@@ -199,7 +199,7 @@ def play_geoguessr_local():
     h_img, w_img, _ = img_giant.shape
 
     if h_img < CROP_TOTAL_SIZE or w_img < CROP_TOTAL_SIZE:
-        print(f"\n❌ CRITICAL ERROR: Your image ({w_img}x{h_img}) is too small!")
+        print(f"\n[ERROR] CRITICAL ERROR: Your image ({w_img}x{h_img}) is too small!")
         sys.exit(1)
 
     db = load_database()

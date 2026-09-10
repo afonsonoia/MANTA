@@ -4,7 +4,7 @@ Esta pasta contém o software de bordo concebido para correr no **Raspberry Pi 3
 
 ---
 
-## ⚡ 1. Gestor Autónomo de Arranque Dual-Mode (`manta_boot.sh`)
+## 1. Gestor Autónomo de Arranque Dual-Mode (`manta_boot.sh`)
 Ao ligar a alimentação do Raspberry Pi 3 A+, o serviço [`manta-boot.service`](file:///c:/Users/Afonso%20Noia/PycharmProjects/BlueSky/Code/MANTA_PI/manta-boot.service) é executado automaticamente e analisa o ambiente durante **30 segundos**:
 
 ```mermaid
@@ -41,7 +41,7 @@ flowchart TD
 
 ---
 
-## 🛡️ 2. Proteção Contra Quebras de Energia (Sem Corrupção)
+## 2. Proteção Contra Quebras de Energia (Sem Corrupção)
 Em voos com UAVs, a bateria LiPo pode desligar-se subitamente na aterragem ou impacto.
 - **Problema do MP4 normal**: O índice (`moov` atom) só é gravado no fecho limpo do ficheiro. Se a energia for cortada, o ficheiro fica corrompido e ilegível.
 - **Solução implementada (`.mkv` + `--flush`)**:
@@ -51,7 +51,7 @@ Em voos com UAVs, a bateria LiPo pode desligar-se subitamente na aterragem ou im
 
 ---
 
-## ✈️ 3. Otimização Anti-Vibração & Anti-Jello (Motor UAV)
+## 3. Otimização Anti-Vibração & Anti-Jello (Motor UAV)
 Os motores elétricos provocam vibrações de alta frequência que causam o efeito ondulado (*jello effect*) em sensores CMOS Rolling Shutter.
 Os scripts implementam as seguintes mitigações óticas e de leitura do sensor IMX378:
 
@@ -67,7 +67,7 @@ Os scripts implementam as seguintes mitigações óticas e de leitura do sensor 
 
 ---
 
-## 🚀 4. Ficheiros Incluídos
+## 4. Ficheiros Incluídos
 
 | Ficheiro | Descrição |
 |---|---|
@@ -79,7 +79,7 @@ Os scripts implementam as seguintes mitigações óticas e de leitura do sensor 
 
 ---
 
-## 📥 5. Como Ativar o Serviço de Boot no Raspberry Pi
+## 5. Como Ativar o Serviço de Boot no Raspberry Pi
 
 Para ativar o arranque automático no Raspberry Pi:
 ```bash
@@ -98,7 +98,7 @@ journalctl -u manta-boot.service -n 50
 
 ---
 
-## 📥 6. Como Sincronizar Apenas Esta Pasta no Raspberry Pi (Sparse-Checkout)
+## 6. Como Sincronizar Apenas Esta Pasta no Raspberry Pi (Sparse-Checkout)
 
 Para clonar e atualizar exclusivamente esta pasta no Raspberry Pi (sem descarregar o restante repositório):
 ```bash
