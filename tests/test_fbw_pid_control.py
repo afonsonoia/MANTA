@@ -967,14 +967,14 @@ class TestFlaperonKinematicsAndSafetyRule:
 
     def test_flaperon_offsets_produce_symmetric_downward_deflection(self):
         us_per_deg = 11.11
-        flap_deg = 15.0
-        flap_offset_us = int(flap_deg * us_per_deg + 0.5)  # 167 us
+        flap_deg = 20.0
+        flap_offset_us = int(flap_deg * us_per_deg + 0.5)  # 222 us
 
-        flaperon_fr = +flap_offset_us  # +167 us (mirrored servo -> right surface DOWN)
-        flaperon_fl = -flap_offset_us  # -167 us (left surface DOWN)
+        flaperon_fr = +flap_offset_us  # +222 us (mirrored servo -> right surface DOWN)
+        flaperon_fl = -flap_offset_us  # -222 us (left surface DOWN)
 
-        assert flaperon_fr == 167
-        assert flaperon_fl == -167
+        assert flaperon_fr == 222
+        assert flaperon_fl == -222
 
         # When roll command is zero (wings level), check that both surfaces deflect DOWN:
         # For FL: positive is UP (+4.0 deg mechanical spline trim = +44 us). Negative offset deflects DOWN.
@@ -982,22 +982,22 @@ class TestFlaperonKinematicsAndSafetyRule:
         neutral_fr = 1500
         neutral_fl = 1544  # 1500 + 44 us mechanical trim
 
-        target_fr_flap = neutral_fr + flaperon_fr  # 1667 us
-        target_fl_flap = neutral_fl + flaperon_fl  # 1377 us
+        target_fr_flap = neutral_fr + flaperon_fr  # 1722 us
+        target_fl_flap = neutral_fl + flaperon_fl  # 1322 us
 
         # Differential roll is (rollOffsetFR - (-rollOffsetFL)) = 0
         diff_roll = (target_fr_flap - neutral_fr) + (target_fl_flap - neutral_fl)
         assert diff_roll == 0, "Symmetric flaperon offset must create exactly 0 differential roll moment!"
 
     def test_servo_physical_bounds_with_flaperons_and_full_roll_command(self):
-        """Under full +/-278 us roll command with flaperons engaged (+/-167 us),
+        """Under full +/-278 us roll command with flaperons engaged (+/-222 us),
         anti-saturation headroom scaling prevents roll command clipping while ensuring
         both FR and FL servos respect the 25 deg angular limit (+/-278 us from trimmed neutral)
         and remain safely inside the [1000, 2000] us hardware pulse range.
         """
         angle_pulse_limit = 278
-        flap_offset_fr = 167
-        flap_offset_fl = -167
+        flap_offset_fr = 222
+        flap_offset_fl = -222
 
         neutral_fr = 1500
         neutral_fl = 1544
@@ -1056,13 +1056,13 @@ class TestFlaperonKinematicsAndSafetyRule:
 
     def test_flaperon_throttle_governor_linear_scaling_and_chatter_immunity(self):
         """Validates the throttle governor for flaperons:
-        - Throttle <= 1200 us: 100% flaperon offset (+167 us FR, -167 us FL = 15 deg DOWN).
+        - Throttle <= 1200 us: 100% flaperon offset (+222 us FR, -222 us FL = 20 deg DOWN).
         - Throttle >= 1500 us: 0% flaperon offset (fully retracted for climb/cruise).
         - 1200 us < Throttle < 1500 us: Continuous uniform linear taper (300 us transition).
         - Jitter of +/-2 us around 1500 us (e.g. 1498 vs 1502 us) produces ~1 us variation (zero chatter).
         """
-        FLAPERON_US_FR = +167
-        FLAPERON_US_FL = -167
+        FLAPERON_US_FR = +222
+        FLAPERON_US_FL = -222
         FLAPERON_THROTTLE_MIN_US = 1200
         FLAPERON_THROTTLE_MAX_US = 1500
 
@@ -1092,8 +1092,8 @@ class TestFlaperonKinematicsAndSafetyRule:
         for throt in [950, 1000, 1100, 1150, 1200]:
             scale, fr, fl = compute_flaperon_offsets(throt, flaperon_active=True)
             assert scale == 1.0
-            assert fr == +167
-            assert fl == -167
+            assert fr == +222
+            assert fl == -222
 
         # Full retraction at climb/cruise throttle (>= 1500 us)
         for throt in [1500, 1502, 1550, 1600, 1800, 2000]:
@@ -1105,25 +1105,25 @@ class TestFlaperonKinematicsAndSafetyRule:
         # Linear taper in transition zone (1200 < throttle < 1500)
         scale_mid, fr_mid, fl_mid = compute_flaperon_offsets(1350, flaperon_active=True)
         assert scale_mid == 0.50
-        assert fr_mid == +84
-        assert fl_mid == -84
+        assert fr_mid == +111
+        assert fl_mid == -111
 
         scale_75, fr_75, fl_75 = compute_flaperon_offsets(1275, flaperon_active=True)
         assert scale_75 == 0.75
-        assert fr_75 == +125
-        assert fl_75 == -125
+        assert fr_75 == +166
+        assert fl_75 == -166
 
         scale_25, fr_25, fl_25 = compute_flaperon_offsets(1425, flaperon_active=True)
         assert scale_25 == 0.25
-        assert fr_25 == +42
-        assert fl_25 == -42
+        assert fr_25 == +56
+        assert fl_25 == -56
 
         # Jitter immunity test around 1500 us:
         # Mini-interference between 1502 and 1498 us:
         _, fr_1502, fl_1502 = compute_flaperon_offsets(1502, flaperon_active=True)
         _, fr_1498, fl_1498 = compute_flaperon_offsets(1498, flaperon_active=True)
         assert fr_1502 == 0
-        assert fr_1498 == 1  # 167 * (2 / 300) = 1.11 -> 1 us change (0.09 deg)
+        assert fr_1498 == 1  # 222 * (2 / 300) = 1.48 -> 1 us change
         assert abs(fr_1502 - fr_1498) <= 1, "Jitter variation must be <= 1 us (well below servo deadband)!"
         assert abs(fl_1502 - fl_1498) <= 1
 
@@ -1135,8 +1135,8 @@ class TestFlaperonKinematicsAndSafetyRule:
         neutral_fr = 1500
         neutral_fl = 1544
         angle_pulse_limit = 278
-        FLAPERON_US_FR = +167
-        FLAPERON_US_FL = -167
+        FLAPERON_US_FR = +222
+        FLAPERON_US_FL = -222
         FLAPERON_THROTTLE_MIN_US = 1200
         FLAPERON_THROTTLE_MAX_US = 1500
 

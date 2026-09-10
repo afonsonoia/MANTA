@@ -31,9 +31,9 @@
 - **I2C (MPU6050 + BMP280)**: SDA=GPIO21, SCL=GPIO22
 
 ## Flight Modes & Transmitter CH5 Calibration (SWC + SWB)
-> **NOTA DE CONTROLO DE VOO (Roll Permanente & Flaperons 15° DOWN)**: O controlo de **Roll está permanentemente ativo** em todos os modos normais de voo (Roll Assist no Modo 1, FBW PI-D no Modo 2, FBW Adaptativo no Modo 3). O switch binário **SWB** opera **Flaperons (até +15.0° para BAIXO)** nas superfícies FR e FL, calculados a partir dos neutros mecânicos trimados (1500 µs e 1544 µs), aumentando sustentação ($C_L$) e arrasto ($C_D$) para facilitar aproximações e aterragens estáveis.
+> **NOTA DE CONTROLO DE VOO (Roll Permanente & Flaperons 20° DOWN)**: O controlo de **Roll está permanentemente ativo** em todos os modos normais de voo (Roll Assist no Modo 1, FBW PI-D no Modo 2, FBW Adaptativo no Modo 3). O switch binário **SWB** opera **Flaperons (até +20.0° para BAIXO)** nas superfícies FR e FL, calculados a partir dos neutros mecânicos trimados (1500 µs e 1544 µs), aumentando sustentação ($C_L$) e arrasto ($C_D$) para facilitar aproximações e aterragens estáveis.
 >
-> **GOVERNADOR DE ACELERAÇÃO DOS FLAPERONS & ANTI-SATURAÇÃO**: Os flaperons variam uniformemente entre **1500 µs e 1200 µs** de Throttle. Acima de $1500\,\mu\text{s}$ estão totalmente recolhidos (0° offset). Abaixo de $1200\,\mu\text{s}$ atingem a deflexão máxima (+15.0° DOWN = $\pm 167\,\mu\text{s}$). Entre $1200\,\mu\text{s}$ e $1500\,\mu\text{s}$, opera uma **rampa linear contínua suave** ($\Delta \text{offset} = 15.0^\circ \times \frac{1500 - \text{Throttle}}{300}$).
+> **GOVERNADOR DE ACELERAÇÃO DOS FLAPERONS & ANTI-SATURAÇÃO**: Os flaperons variam uniformemente entre **1500 µs e 1200 µs** de Throttle. Acima de $1500\,\mu\text{s}$ estão totalmente recolhidos (0° offset). Abaixo de $1200\,\mu\text{s}$ atingem a deflexão máxima (+20.0° DOWN = $\pm 222\,\mu\text{s}$). Entre $1200\,\mu\text{s}$ e $1500\,\mu\text{s}$, opera uma **rampa linear contínua suave** ($\Delta \text{offset} = 20.0^\circ \times \frac{1500 - \text{Throttle}}{300}$).
 >
 > **PRIORIDADE DE ROLL E PROTEÇÃO ANTI-SATURAÇÃO (HEADROOM SCALING)**: O comando de Roll do piloto e do FBW mantém **100% de autoridade e prioridade**. Quando o comando de Roll aproxima o servo do limite angular (`anglePulseLimit = ±278 µs`), o offset dos flaperons é dinamicamente reduzido pela margem disponível (`flaperonHeadroom = 1.0 - |rollDiff| / anglePulseLimit`), garantindo **resposta de Roll imediata sem saturação, sem clipping e sem esforço mecânico excessivo nos servos** (mantendo-os sempre com folga ampla dentro da faixa [1000, 2000] µs).
 >
@@ -46,9 +46,9 @@
 | 1 | OFF | **1166 µs** (< 1247) | **Modo 1** | **OFF** | Pitch 100% Manual + Roll Assist Permanente (Flaps OFF) |
 | 2 | OFF | **1328 µs** (1247–1370) | **Modo 2** | **OFF** | FBW Pitch PI-D + FBW Roll PI-D Fixo (Flaps OFF) |
 | 3 | OFF | **1411 µs** (1370–1476) | **Modo 3** | **OFF** | FBW Pitch PI-D + FBW Roll Adaptativo Extremum Seeking (Flaps OFF) |
-| 1 | ON  | **1541 µs** (1476–1683) | **Modo 1** | **ON**  | Pitch 100% Manual + Roll Assist + **Flaperons 15° DOWN** |
-| 2 | ON  | **1825 µs** (1683–1884) | **Modo 2** | **ON**  | FBW Pitch PI-D + FBW Roll PI-D + **Flaperons 15° DOWN** |
-| 3 | ON  | **1942 µs** (>= 1884) | **Modo 2** *(Auto)* | **ON**  | **Demotado para Modo 2** + **Flaperons 15° DOWN** (Regra Anti-Learning) |
+| 1 | ON  | **1541 µs** (1476–1683) | **Modo 1** | **ON**  | Pitch 100% Manual + Roll Assist + **Flaperons 20° DOWN** |
+| 2 | ON  | **1825 µs** (1683–1884) | **Modo 2** | **ON**  | FBW Pitch PI-D + FBW Roll PI-D + **Flaperons 20° DOWN** |
+| 3 | ON  | **1942 µs** (>= 1884) | **Modo 2** *(Auto)* | **ON**  | **Demotado para Modo 2** + **Flaperons 20° DOWN** (Regra Anti-Learning) |
 
 ## Telemetry Architecture (Pure Simplex Downlink)
 - **Aeronave (MANTA ESP32)**: Transmissor Beacon **Simplex TX** dedicado (433 MHz, SF7, BW 250kHz, CR 4/5, Sync 0x12).

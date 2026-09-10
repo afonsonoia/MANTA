@@ -168,8 +168,8 @@ class TestFlightSafetyAndSysID:
         neutral_fr = 1500
         neutral_fl = 1544
         angle_limit = 278
-        flaperon_us_fr = +167  # 15.0 deg DOWN
-        flaperon_us_fl = -167  # 15.0 deg DOWN
+        flaperon_us_fr = +222  # 20.0 deg DOWN
+        flaperon_us_fl = -222  # 20.0 deg DOWN
 
         for roll_diff in [-278, -150, 0, 150, 278]:
             # Anti-saturation headroom scaling (Roll Priority)

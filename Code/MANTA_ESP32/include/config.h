@@ -30,22 +30,22 @@ constexpr float US_PER_DEGREE =
 constexpr uint8_t DEFAULT_SERVO_MAX_ANGLE_DEG =
     25; // Default +/- 25 degrees rotation limit (~278us from neutral: 1222us - 1778us)
 
-// Flaperons (Landing Flaps) Parameters: Deflect both roll surfaces 15 degrees DOWN
-constexpr float FLAPERON_DEFLECTION_DEG = 15.0f; // 15.0 deg DOWN max deflection for approach and landing
+// Flaperons (Landing Flaps) Parameters: Deflect both roll surfaces 20 degrees DOWN
+constexpr float FLAPERON_DEFLECTION_DEG = 20.0f; // 20.0 deg DOWN max deflection for approach and landing
 constexpr int FLAPERON_OFFSET_US =
-    (int)(FLAPERON_DEFLECTION_DEG * US_PER_DEGREE + 0.5f); // ~167 us
+    (int)(FLAPERON_DEFLECTION_DEG * US_PER_DEGREE + 0.5f); // ~222 us
 // Servos FR & FL are physically mirrored:
 // Deflection is calculated directly from each servo's trimmed neutral (spline/horn fit):
-// For FL: negative PWM deflects DOWN (-167 us from trimmed neutral)
-// For FR: positive PWM deflects DOWN (+167 us from trimmed neutral)
-constexpr int FLAPERON_US_FR = +FLAPERON_OFFSET_US; // +167 us -> deflects right rolleron DOWN
-constexpr int FLAPERON_US_FL = -FLAPERON_OFFSET_US; // -167 us -> deflects left rolleron DOWN
+// For FL: negative PWM deflects DOWN (-222 us from trimmed neutral)
+// For FR: positive PWM deflects DOWN (+222 us from trimmed neutral)
+constexpr int FLAPERON_US_FR = +FLAPERON_OFFSET_US; // +222 us -> deflects right rolleron DOWN
+constexpr int FLAPERON_US_FL = -FLAPERON_OFFSET_US; // -222 us -> deflects left rolleron DOWN
 
 // Flaperon Throttle Governor Parameters:
 // Flaperons deploy smoothly between 1500us and 1200us throttle (linear uniform transition).
-// Above 1500us they are fully retracted (0 offset). Below 1200us they reach full 15.0 deg deflection.
+// Above 1500us they are fully retracted (0 offset). Below 1200us they reach full 20.0 deg deflection.
 constexpr int FLAPERON_THROTTLE_MAX_US = 1500; // >= 1500 us: Flaperons fully retracted (0 offset)
-constexpr int FLAPERON_THROTTLE_MIN_US = 1200; // <= 1200 us: Flaperons fully deployed (15.0 deg DOWN)
+constexpr int FLAPERON_THROTTLE_MIN_US = 1200; // <= 1200 us: Flaperons fully deployed (20.0 deg DOWN)
 
 // RC Stick Exponential Response Factor (0.0 = Linear, 1.0 = Pure Cubic; 0.35 = 35% Expo for center stick precision)
 constexpr float RC_EXPO_FACTOR = 0.35f;
@@ -162,9 +162,9 @@ constexpr float ESC_ROLL_RATE_WEIGHT = 0.02f;
 // SWC 1 + SWB OFF = 1166us (Mode 1 + Flaperons OFF)
 // SWC 2 + SWB OFF = 1328us (Mode 2 + Flaperons OFF)
 // SWC 3 + SWB OFF = 1411us (Mode 3 + Flaperons OFF)
-// SWC 1 + SWB ON  = 1541us (Mode 1 + Flaperons ON: 15 deg DOWN)
-// SWC 2 + SWB ON  = 1825us (Mode 2 + Flaperons ON: 15 deg DOWN)
-// SWC 3 + SWB ON  = 1942us (Mode 2 Auto Flap-Safe + Flaperons ON: 15 deg DOWN)
+// SWC 1 + SWB ON  = 1541us (Mode 1 + Flaperons ON: 20 deg DOWN)
+// SWC 2 + SWB ON  = 1825us (Mode 2 + Flaperons ON: 20 deg DOWN)
+// SWC 3 + SWB ON  = 1942us (Mode 2 Auto Flap-Safe + Flaperons ON: 20 deg DOWN)
 
 // Decision thresholds with Schmitt-trigger hysteresis bands for EMI rejection:
 // Transition 1: Mode 1 OFF <-> Mode 2 OFF (Midpoint ~1247us)
