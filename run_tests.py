@@ -34,8 +34,8 @@ CATEGORIES = {
     },
     "safety": {
         "title": "Flight Safety, Failsafes & SysID Alignment",
-        "description": "Soft voltage power floor, cascaded failsafes & SysID -90 deg gyro auto-detection",
-        "files": ["tests/test_flight_safety_and_sysid.py"]
+        "description": "Soft voltage power floor, cascaded failsafes, SysID & Raspberry Pi boot manager",
+        "files": ["tests/test_flight_safety_and_sysid.py", "tests/test_manta_pi_boot.py"]
     },
     "sensors": {
         "title": "Sensor Calibration & Ground Truth Verification",

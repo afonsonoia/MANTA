@@ -39,6 +39,15 @@ flowchart TD
   2. **Poupança de Energia**: Desliga os circuitos de saída de vídeo HDMI (`vcgencmd display_power 0`), poupando cerca de ~30 mA.
   3. **Gravação Contínua e Segura**: Inicia automaticamente o script `record_flight.sh` gravando o voo em `.mkv` sem perigo de corrupção caso a bateria se desligue.
 
+### Proteção Anti-Lockout (Prevenção de Ciclo de Rádio Desligado)
+- Se o Pi entrou em Modo Voo num voo anterior, o `systemd-rfkill` e o `NetworkManager` persistem esse estado em disco.
+- Para evitar que no arranque seguinte o Pi fique preso num **ciclo infinito de Wi-Fi desligado**, o sistema implementa uma **reativação ativa multi-camada**:
+  1. **Nível Systemd (`ExecStartPre=+`)**: Desbloqueia `rfkill` com privilégios de `root` antes de qualquer processo de utilizador arrancar.
+  2. **Nível NetworkManager**: Força o rádio sem fios e a pilha de rede a ligar (`nmcli radio wifi on`).
+  3. **Nível Interface**: Coloca as interfaces `wl*` no estado operacional `UP`.
+  4. **Nível Rádio**: Dispara um `rescan` imediato de redes Wi-Fi para acelerar a associação.
+  5. **Deteção Sem Falsos Negativos**: Valida a conectividade através de IPv4 atribuído na interface wireless (`wlan0`) e carrier ativo, evitando desligar o Wi-Fi se o router bloquear ping ICMP ou não tiver ligação WAN exterior à Internet.
+
 ---
 
 ## 2. Proteção Contra Quebras de Energia (Sem Corrupção)
@@ -64,6 +73,8 @@ Os scripts implementam as seguintes mitigações óticas e de leitura do sensor 
    - Evita que filtros de suavização misturem ruído de vibração entre frames, eliminando o efeito fantasma ou borrão de contornos.
 4. **Codificação H.264 por Hardware (`bcm2835-codec`)**:
    - Codificação acelerada pelo hardware do processador BCM2837, sem sobrecarregar a CPU nem perder fotogramas.
+5. **Bloqueio de Foco no Infinito (`--autofocus-mode manual --lens-position 0.0`)**:
+   - Elimina oscilações ou tentativas de foco automático (*focus hunting*) provocadas por vibração ou movimento rápido. Se a câmara tiver suporte a controlo eletrónico, bloqueia no infinito ($\infty$, ideal para UAV > 5m). Se for módulo de foco fixo mecânico (ex: DFRobot SEN0632), o parâmetro é aceite de forma transparente pelo `libcamera`.
 
 ---
 

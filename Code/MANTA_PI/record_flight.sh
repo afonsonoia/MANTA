@@ -26,7 +26,9 @@ VIDEO_DIR="${VIDEO_DIR:-/home/pc/flight_videos}"
 WIDTH="${WIDTH:-1920}"
 HEIGHT="${HEIGHT:-1080}"
 FPS="${FPS:-30}"
+BITRATE="${BITRATE:-15000000}"  # 15 Mbps (qualidade cristalina 1080p estilo Action Cam)
 EXPOSURE="${EXPOSURE:-sport}"
+DENOISE="${DENOISE:-cdn_fast}"
 SHUTTER_US="${SHUTTER_US:-0}"  # 0 = auto com prioridade rápida (sport), ou ex: 2000 (1/500s)
 
 # Criar pasta de gravações se não existir
@@ -46,7 +48,7 @@ OUTPUT_FILE="${VIDEO_DIR}/manta_flight_${TIMESTAMP}.mkv"
 echo "=================================================================="
 echo " MANTA UAV — Início de Gravação de Voo Segura"
 echo " Ficheiro: $OUTPUT_FILE"
-echo " Resolução: ${WIDTH}x${HEIGHT} @ ${FPS} fps | Exposição: ${EXPOSURE}"
+echo " Resolução: ${WIDTH}x${HEIGHT} @ ${FPS} fps | Bitrate: $((BITRATE/1000000)) Mbps | Exposição: ${EXPOSURE}"
 if [ "$SHUTTER_US" -gt 0 ]; then
     echo " Shutter fixo: ${SHUTTER_US} µs (1/$((1000000/SHUTTER_US))s anti-blur)"
 fi
@@ -60,11 +62,17 @@ ARGS=(
     --width "$WIDTH"
     --height "$HEIGHT"
     --framerate "$FPS"
+    --bitrate "$BITRATE"
+    --profile high
     --exposure "$EXPOSURE"
-    --denoise cdn_off
+    --denoise "$DENOISE"
+    --autofocus-mode manual
+    --lens-position 0.0
     --flush
     --codec libav
     --libav-format matroska
+    --vflip
+    --hflip
     -o "$OUTPUT_FILE"
 )
 

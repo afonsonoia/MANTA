@@ -4,5 +4,5 @@ cd /d "%~dp0"
 echo ========================================================
 echo   MANTA Companion Computer - SSH Live Video Stream
 echo ========================================================
-python stream_receiver.py
+python stream_receiver.py %*
 pause

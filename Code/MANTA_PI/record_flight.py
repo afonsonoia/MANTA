@@ -52,11 +52,17 @@ def main():
         "--width", str(args.width),
         "--height", str(args.height),
         "--framerate", str(args.fps),
+        "--bitrate", "15000000",
+        "--profile", "high",
         "--exposure", args.exposure,
-        "--denoise", "cdn_off",
+        "--denoise", "cdn_fast",
+        "--autofocus-mode", "manual",
+        "--lens-position", "0.0",
         "--flush",
         "--codec", "libav",
         "--libav-format", "matroska",
+        "--vflip",
+        "--hflip",
         "-o", out_filename
     ]
 

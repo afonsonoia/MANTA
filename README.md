@@ -128,9 +128,9 @@ The flight controller integrates an intelligent **attitude-aware roll limitation
 ### Phase 3: Flight Control & Fly-By-Wire Stabilization
 - [x] Integrate 6-axis MPU6050 Mahony AHRS quaternion sensor fusion into low-level ESP32 firmware for high-rate, low-drift attitude estimation.
 - [x] Implement attitude-aware roll envelope protection and progressive bank angle limiting on RC Channel 5.
-- [ ] Implement and calibrate closed-loop PID controllers for Pitch (rear V-tail elevators) and Roll (front rollerons).
-- [ ] Conduct field flight tests to calibrate PIDs for smooth, wind-resistant fly-by-wire leveling and stability.
-- [ ] Execute extensive flight testing under varied weather conditions to thoroughly validate closed-loop stability before moving to Phase 4.
+- [x] Implement and calibrate closed-loop PID controllers for Pitch (rear V-tail elevators) and Roll (front rollerons).
+- [x] Conduct field flight tests to calibrate PIDs for smooth, wind-resistant fly-by-wire leveling and stability.
+- [x] Execute extensive flight testing under varied weather conditions to thoroughly validate closed-loop stability before moving to Phase 4.
 
 ### Phase 4: Autonomous Waypoint Navigation & LoRa Path-Planning
 - [ ] Implement interactive trajectory planner in PC Ground Station UI to select waypoints (e.g., 5-point flight path) on a map.

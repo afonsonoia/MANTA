@@ -34,23 +34,75 @@ log "A iniciar Gestor Autónomo de Arranque MANTA UAV"
 log "Janela de deteção de Wi-Fi: ${WIFI_TIMEOUT_SEC} segundos"
 log "=========================================================="
 
-# Garantir que o Wi-Fi não está bloqueado para permitir tentativa de ligação
-sudo rfkill unblock wifi 2>/dev/null || true
+# ------------------------------------------------------------------------------
+# GARANTIA DE REATIVAÇÃO DE WI-FI NO ARRANQUE (Prevenção de Ciclo Infinito)
+# ------------------------------------------------------------------------------
+# Se no boot anterior o Pi entrou em Modo Voo (executou rfkill block wifi/all),
+# o kernel, o systemd-rfkill e o NetworkManager guardam esse estado desligado.
+# Aqui forçamos a reativação ativa e profunda em todas as camadas do sistema:
+log "[*] A reativar e desbloquear subsistema de rádio Wi-Fi..."
+
+# 1. Desbloquear rfkill no kernel/driver
+sudo rfkill unblock wifi 2>/dev/null || rfkill unblock wifi 2>/dev/null || true
+sudo rfkill unblock all 2>/dev/null || rfkill unblock all 2>/dev/null || true
+
+# 2. Reativar rádio e networking no NetworkManager (Raspberry Pi OS Bookworm)
+if command -v nmcli >/dev/null 2>&1; then
+    sudo nmcli radio wifi on 2>/dev/null || nmcli radio wifi on 2>/dev/null || true
+    sudo nmcli networking on 2>/dev/null || nmcli networking on 2>/dev/null || true
+fi
+
+# 3. Forçar todas as interfaces wireless (wlan0, etc.) para estado UP
+for iface in $(ip -o link show 2>/dev/null | awk -F': ' '{print $2}' | grep -E '^wl'); do
+    sudo ip link set "$iface" up 2>/dev/null || ip link set "$iface" up 2>/dev/null || true
+done
+
+# 4. Disparar pedido ativo de varrimento de redes para associação imediata
+if command -v nmcli >/dev/null 2>&1; then
+    sudo nmcli device wifi rescan 2>/dev/null || nmcli device wifi rescan 2>/dev/null || true
+elif command -v wpa_cli >/dev/null 2>&1; then
+    sudo wpa_cli -i wlan0 reassociate 2>/dev/null || wpa_cli -i wlan0 reassociate 2>/dev/null || true
+fi
+
+# Pequena pausa para o firmware e rádio estabilizarem após o unblock
+sleep 2
+
+# Função inteligente de deteção de conectividade Wi-Fi (sem falsos negativos)
+check_wifi_connection() {
+    # 1. Validação via NetworkManager
+    if command -v nmcli >/dev/null 2>&1; then
+        if nmcli -t -f TYPE,STATE dev 2>/dev/null | grep -qE '^wifi:connected'; then
+            return 0
+        fi
+    fi
+
+    # 2. Validação por IPv4 atribuído na interface wireless (fora de 127.x e 169.254.x)
+    local IP_WL
+    IP_WL=$(ip -4 -o addr show 2>/dev/null | awk '$2 ~ /^wl/ {split($4, a, "/"); print a[1]}' | grep -vE '^(127\.|169\.254\.)' | head -n 1)
+    if [ -n "$IP_WL" ]; then
+        return 0
+    fi
+
+    # 3. Validação clássica via ping ao Gateway ou DNS externo
+    local GATEWAY
+    GATEWAY=$(ip route show default 2>/dev/null | awk '/default via/ {print $3; exit}')
+    if [ -n "$GATEWAY" ]; then
+        if ping -c 1 -W 1 "$GATEWAY" >/dev/null 2>&1 || ping -c 1 -W 1 1.1.1.1 >/dev/null 2>&1 || ping -c 1 -W 1 8.8.8.8 >/dev/null 2>&1; then
+            return 0
+        fi
+    fi
+
+    return 1
+}
 
 CONNECTED=0
 ELAPSED=0
 
 # Ciclo de verificação de ligação à rede por até 30 segundos
 while [ "$ELAPSED" -lt "$WIFI_TIMEOUT_SEC" ]; do
-    # Verifica se existe gateway por defeito no wlan0
-    GATEWAY=$(ip route show default 2>/dev/null | awk '/default via/ {print $3; exit}')
-    
-    if [ -n "$GATEWAY" ]; then
-        # Testa se consegue comunicar com o router ou com a internet
-        if ping -c 1 -W 1 "$GATEWAY" >/dev/null 2>&1 || ping -c 1 -W 1 1.1.1.1 >/dev/null 2>&1; then
-            CONNECTED=1
-            break
-        fi
+    if check_wifi_connection; then
+        CONNECTED=1
+        break
     fi
 
     sleep 1
@@ -70,8 +122,9 @@ if [ "$CONNECTED" -eq 1 ]; then
     # --------------------------------------------------------------------------
     # CENÁRIO A: MODO PROGRAMAÇÃO / BANCADA
     # --------------------------------------------------------------------------
+    WIFI_IP=$(ip -4 -o addr show 2>/dev/null | awk '$2 ~ /^wl/ {split($4, a, "/"); print a[1]}' | head -n 1)
     log "----------------------------------------------------------"
-    log "[+] Wi-Fi DETETADO após ${ELAPSED}s!"
+    log "[+] Wi-Fi DETETADO após ${ELAPSED}s! IP: ${WIFI_IP:-N/A}"
     log "[+] A ENTRAR EM MODO PROGRAMAÇÃO / BANCADA"
     log "----------------------------------------------------------"
     

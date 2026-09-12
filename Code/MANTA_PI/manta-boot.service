@@ -7,6 +7,8 @@ Wants=network.target
 Type=simple
 User=pc
 WorkingDirectory=/home/pc/MANTA/Code/MANTA_PI
+# Desbloqueio prioritário como root (+) para eliminar persistência de rfkill/NetworkManager
+ExecStartPre=+/bin/sh -c "rfkill unblock all 2>/dev/null || true; command -v nmcli >/dev/null 2>&1 && nmcli radio wifi on 2>/dev/null || true; command -v nmcli >/dev/null 2>&1 && nmcli networking on 2>/dev/null || true"
 ExecStart=/bin/bash /home/pc/MANTA/Code/MANTA_PI/manta_boot.sh
 Restart=no
 KillSignal=SIGINT

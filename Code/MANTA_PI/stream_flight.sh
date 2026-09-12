@@ -12,10 +12,18 @@ echo "[*] A iniciar transmissão rpicam-vid: ${WIDTH}x${HEIGHT} @ ${FPS}fps..." 
 exec rpicam-vid \
     -t 0 \
     --inline \
+    --flush \
+    --profile baseline \
+    --intra 10 \
+    --bitrate 3000000 \
     --width "$WIDTH" \
     --height "$HEIGHT" \
     --framerate "$FPS" \
     --exposure sport \
     --denoise cdn_off \
+    --autofocus-mode manual \
+    --lens-position 0.0 \
+    --vflip \
+    --hflip \
     -n \
     -o -
