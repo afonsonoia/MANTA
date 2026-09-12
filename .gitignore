@@ -83,4 +83,8 @@ compile_commands.json
 # Temporary IMU test project
 temp_imu_test/
 
-
+# =========================
+# Computer Vision Experiments & Test Lab (Local Only)
+# =========================
+cv_lab/
+cv_experiments/
