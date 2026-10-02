@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+from __future__ import annotations
 """MANTA Flight Log Replay & Mission Planner Simulator."""
 
 import sys
@@ -8,14 +9,25 @@ import time
 import math
 import argparse
 import glob
-import numpy as np
-import pandas as pd
+try:
+    import numpy as np
+    import pandas as pd
+    HAS_PANDAS_NUMPY = True
+except ImportError:
+    np = None
+    pd = None
+    HAS_PANDAS_NUMPY = False
 
 try:
     from pymavlink import mavutil
     HAS_PYMAVLINK = True
+    MAV_PARAM_TYPE_REAL32 = mavutil.mavlink.MAV_PARAM_TYPE_REAL32
+    MAV_PARAM_TYPE_INT32 = mavutil.mavlink.MAV_PARAM_TYPE_INT32
 except ImportError:
+    mavutil = None
     HAS_PYMAVLINK = False
+    MAV_PARAM_TYPE_REAL32 = 9
+    MAV_PARAM_TYPE_INT32 = 6
 
 # Path setup
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -213,12 +225,12 @@ def estimate_flight_headings(df: pd.DataFrame, timestamps: np.ndarray, cogs: lis
 
 
 REPLAY_PARAMETERS = [
-    (b"SYSID_SW_MREV", 120.0, mavutil.mavlink.MAV_PARAM_TYPE_REAL32),
-    (b"STAT_RUNTIME", 1.0, mavutil.mavlink.MAV_PARAM_TYPE_REAL32),
-    (b"STAT_FLTTIME", 1.0, mavutil.mavlink.MAV_PARAM_TYPE_REAL32),
-    (b"SYSID_THISMAV", 1.0, mavutil.mavlink.MAV_PARAM_TYPE_INT32),
-    (b"FRAME_CLASS", 1.0, mavutil.mavlink.MAV_PARAM_TYPE_INT32),
-    (b"ARMING_CHECK", 0.0, mavutil.mavlink.MAV_PARAM_TYPE_INT32),
+    (b"SYSID_SW_MREV", 120.0, MAV_PARAM_TYPE_REAL32),
+    (b"STAT_RUNTIME", 1.0, MAV_PARAM_TYPE_REAL32),
+    (b"STAT_FLTTIME", 1.0, MAV_PARAM_TYPE_REAL32),
+    (b"SYSID_THISMAV", 1.0, MAV_PARAM_TYPE_INT32),
+    (b"FRAME_CLASS", 1.0, MAV_PARAM_TYPE_INT32),
+    (b"ARMING_CHECK", 0.0, MAV_PARAM_TYPE_INT32),
 ]
 
 

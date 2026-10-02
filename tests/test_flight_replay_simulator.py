@@ -11,18 +11,36 @@ GROUND_STATION_DIR = os.path.join(PROJECT_ROOT, "Code", "GROUND-STATION")
 if GROUND_STATION_DIR not in sys.path:
     sys.path.insert(0, GROUND_STATION_DIR)
 
+try:
+    from pymavlink import mavutil
+    HAS_PYMAVLINK = True
+except ImportError:
+    HAS_PYMAVLINK = False
+
+try:
+    import pandas as pd
+    import numpy as np
+    HAS_PANDAS_NUMPY = True
+except ImportError:
+    HAS_PANDAS_NUMPY = False
+
 from replay_flight_mission_planner import (
     list_available_flight_logs,
     calculate_battery_pct,
     clean_flight_altitudes,
     prepare_flight_trajectory,
     estimate_flight_headings,
-    replay_flight_log
+    replay_flight_log,
 )
 
 
-def test_list_flight_logs():
+def test_list_flight_logs(tmp_path):
     logs = list_available_flight_logs()
+    if len(logs) == 0:
+        # In CI where flight_logs is gitignored, test with a mock log in tmp_path
+        mock_log = tmp_path / "manta_flight_0001_20260901_100000.csv"
+        mock_log.write_text("Record Number,Elapsed Time (s),Latitude,Longitude\n1,0.0,32.7,-16.8\n")
+        logs = list_available_flight_logs(log_dir=str(tmp_path))
     assert len(logs) > 0
     for l in logs:
         assert os.path.exists(l)
@@ -35,12 +53,18 @@ def test_battery_percentage_calculation():
     assert calculate_battery_pct(0.0) == 0
 
 
-def test_replay_playback_network_stream():
+@pytest.mark.skipif(not HAS_PYMAVLINK or not HAS_PANDAS_NUMPY, reason="pymavlink, pandas, or numpy not installed")
+def test_replay_playback_network_stream(tmp_path):
     """Validates MAVLink UDP streaming to listener."""
-    from pymavlink import mavutil
-    
     logs = list_available_flight_logs()
-    sample_log = logs[0]
+    if len(logs) == 0:
+        sample_log = str(tmp_path / "manta_mock_flight.csv")
+        with open(sample_log, "w", encoding="utf-8") as f:
+            f.write("Record Number,Elapsed Time (s),Roll (deg),Pitch (deg),Yaw (deg),Latitude,Longitude,Altitude (m),Battery Voltage (V),Throttle (PWM)\n")
+            for i in range(15):
+                f.write(f"{i},{i*0.1},0.0,2.0,90.0,32.7259,-16.8850,50.0,15.2,1500\n")
+    else:
+        sample_log = logs[0]
 
     t = threading.Thread(
         target=replay_flight_log,
@@ -53,10 +77,10 @@ def test_replay_playback_network_stream():
         },
         daemon=True
     )
-    
+
     mav_in = mavutil.mavlink_connection("udpin:127.0.0.1:14552")
     t.start()
-    
+
     received_types = set()
     start_wait = time.time()
     while time.time() - start_wait < 3.0:
@@ -65,17 +89,15 @@ def test_replay_playback_network_stream():
             received_types.add(msg.get_type())
         else:
             time.sleep(0.02)
-            
+
     assert "HEARTBEAT" in received_types
     assert "ATTITUDE" in received_types
     assert "GLOBAL_POSITION_INT" in received_types
 
 
+@pytest.mark.skipif(not HAS_PANDAS_NUMPY, reason="pandas or numpy not installed")
 def test_trajectory_smoothing_and_velocity():
     """Tests 1Hz to 5Hz interpolation and velocity vector derivation."""
-    import pandas as pd
-    import numpy as np
-
     # 10 points representing 2 seconds at 5Hz, with GPS updating every 1s (rows 0-4 same, 5-9 same)
     # Moving due North by 11.11 meters (~0.0001 deg lat in 1 sec => ~11.1 m/s)
     timestamps = np.array([i * 0.2 for i in range(10)])
@@ -84,7 +106,7 @@ def test_trajectory_smoothing_and_velocity():
     df = pd.DataFrame({"Latitude": lats, "Longitude": lons})
 
     s_lats, s_lons, vx, vy, spd, cog = prepare_flight_trajectory(df, timestamps)
-    
+
     assert len(s_lats) == 10
     # Between index 0 and index 5, intermediate points should strictly increase smoothly
     assert s_lats[0] < s_lats[2] < s_lats[5]
@@ -95,11 +117,9 @@ def test_trajectory_smoothing_and_velocity():
         assert abs(vy[i]) < 1.0
 
 
+@pytest.mark.skipif(not HAS_PANDAS_NUMPY, reason="pandas or numpy not installed")
 def test_heading_estimation_fusion():
     """Tests heading fusion combining Gyro Z and GPS COG."""
-    import pandas as pd
-    import numpy as np
-
     n = 20
     timestamps = np.array([i * 0.2 for i in range(n)])
     speeds = [12.0] * n
@@ -113,9 +133,9 @@ def test_heading_estimation_fusion():
     assert abs(headings[-1] - 90.0) < 1.0
 
 
+@pytest.mark.skipif(not HAS_PANDAS_NUMPY, reason="pandas or numpy not installed")
 def test_clean_flight_altitudes():
     """Tests rejection of extreme sensor spikes (e.g. 1186m)."""
-    import pandas as pd
     df = pd.DataFrame({
         "Altitude (m)": [10.0, 10.5, 1186.8, 1186.8, 11.0, 11.2]
     })
@@ -126,6 +146,7 @@ def test_clean_flight_altitudes():
     assert cleaned[4] == 11.0
 
 
+@pytest.mark.skipif(not HAS_PANDAS_NUMPY, reason="pandas or numpy not installed")
 def test_list_flight_logs_chronological_order(tmp_path):
     """Verifies that flight logs are sorted chronologically with newest flights first."""
     # Create mock flight logs with different timestamps
@@ -149,9 +170,9 @@ def test_list_flight_logs_chronological_order(tmp_path):
     ]
 
 
+@pytest.mark.skipif(not HAS_PYMAVLINK, reason="pymavlink not installed")
 def test_handle_mission_planner_requests():
     """Verifies that handle_mission_planner_requests answers PARAM_REQUEST_LIST, MISSION_REQUEST_LIST, and GET_HOME."""
-    from pymavlink import mavutil
     from replay_flight_mission_planner import handle_mission_planner_requests
 
     # Set up loopback pair
@@ -246,9 +267,9 @@ def test_handle_mission_planner_requests():
     assert home_pos_received is True
 
 
+@pytest.mark.skipif(not HAS_PYMAVLINK, reason="pymavlink not installed")
 def test_send_mavlink_frame_gps_and_sensors_health():
     """Verifies that send_mavlink_frame provides 1.0m HDOP (eph=100) and includes GPS sensor in SYS_STATUS."""
-    from pymavlink import mavutil
     from replay_flight_mission_planner import send_mavlink_frame
 
     gcs = mavutil.mavlink_connection("udpin:127.0.0.1:14561")
@@ -287,7 +308,3 @@ def test_send_mavlink_frame_gps_and_sensors_health():
     assert (sys_status.onboard_control_sensors_present & mavutil.mavlink.MAV_SYS_STATUS_SENSOR_GPS) != 0
     assert (sys_status.onboard_control_sensors_enabled & mavutil.mavlink.MAV_SYS_STATUS_SENSOR_GPS) != 0
     assert (sys_status.onboard_control_sensors_health & mavutil.mavlink.MAV_SYS_STATUS_SENSOR_GPS) != 0
-
-
-
-

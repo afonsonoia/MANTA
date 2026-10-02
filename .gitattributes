@@ -1,0 +1,7 @@
+# ========================================================
+# Git Attributes: Enforce strict Unix LF line endings
+# for all shell scripts, Linux services, and Raspberry Pi stack
+# ========================================================
+*.sh text eol=lf
+*.service text eol=lf
+Code/MANTA_PI/* text eol=lf
