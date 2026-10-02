@@ -1,21 +1,21 @@
 #!/bin/bash
 # ==============================================================================
-# MANTA UAV — Gestor Autónomo de Arranque (Boot Manager)
-# Dual-Mode: Modo Programação (Bancada) vs Modo Voo (Campo)
+# MANTA UAV — Autonomous Boot Manager
+# Dual-Mode: Development Mode (Bench) vs Flight Mode (Field)
 # ==============================================================================
-# Comportamento:
-# 1. Durante os primeiros 30 segundos após o boot, tenta obter ligação Wi-Fi.
-# 2. SE CONECTAR AO WI-FI (< 30s):
-#    - Entra em MODO PROGRAMAÇÃO / BANCADA.
-#    - Executa 'git pull' para atualizar o repositório com o código mais recente.
-#    - Mantém o Wi-Fi e o SSH ativos para trabalho do utilizador.
-#    - NÃO inicia gravação de vídeo (deixa a câmara livre).
-# 3. SE NÃO CONECTAR AO WI-FI (TIMEOUT 30s):
-#    - Entra em MODO VOO / AUTÓNOMO.
-#    - Desliga todas as comunicações sem fios (Wi-Fi e Bluetooth) para eliminar
-#      interferências de RF nos 2.4 GHz com o rádio de controlo RC e LoRa.
-#    - Desliga o circuito HDMI para poupar energia (~30mA).
-#    - Inicia automaticamente a gravação de voo segura e anti-vibração (.mkv).
+# Behavior:
+# 1. During the first 30 seconds after boot, attempts to connect to Wi-Fi.
+# 2. IF WI-FI CONNECTED (< 30s):
+#    - Enters DEVELOPMENT / BENCH MODE.
+#    - Runs 'git pull' to update local repository to latest code.
+#    - Keeps Wi-Fi and SSH active for user access.
+#    - Does NOT start video recording (camera left free).
+# 3. IF NO WI-FI (30s TIMEOUT):
+#    - Enters FLIGHT / AUTONOMOUS MODE.
+#    - Disables wireless communications (Wi-Fi and Bluetooth) to eliminate
+#      2.4 GHz RF interference with RC receiver and LoRa.
+#    - Disables HDMI output circuitry to save battery power (~30mA).
+#    - Automatically launches safe, anti-vibration flight recording (.mkv).
 # ==============================================================================
 
 set -u
@@ -30,60 +30,49 @@ log() {
 }
 
 log "=========================================================="
-log "A iniciar Gestor Autónomo de Arranque MANTA UAV"
-log "Janela de deteção de Wi-Fi: ${WIFI_TIMEOUT_SEC} segundos"
+log "Starting MANTA UAV Autonomous Boot Manager"
+log "Wi-Fi detection window: ${WIFI_TIMEOUT_SEC} seconds"
 log "=========================================================="
 
-# ------------------------------------------------------------------------------
-# GARANTIA DE REATIVAÇÃO DE WI-FI NO ARRANQUE (Prevenção de Ciclo Infinito)
-# ------------------------------------------------------------------------------
-# Se no boot anterior o Pi entrou em Modo Voo (executou rfkill block wifi/all),
-# o kernel, o systemd-rfkill e o NetworkManager guardam esse estado desligado.
-# Aqui forçamos a reativação ativa e profunda em todas as camadas do sistema:
-log "[*] A reativar e desbloquear subsistema de rádio Wi-Fi..."
-
-# 1. Desbloquear rfkill no kernel/driver
+# Multi-layer Wi-Fi subsystem unblock on startup (prevents persistent rfkill lockouts)
+log "[*] Unblocking Wi-Fi radio subsystem..."
 sudo rfkill unblock wifi 2>/dev/null || rfkill unblock wifi 2>/dev/null || true
 sudo rfkill unblock all 2>/dev/null || rfkill unblock all 2>/dev/null || true
 
-# 2. Reativar rádio e networking no NetworkManager (Raspberry Pi OS Bookworm)
 if command -v nmcli >/dev/null 2>&1; then
     sudo nmcli radio wifi on 2>/dev/null || nmcli radio wifi on 2>/dev/null || true
     sudo nmcli networking on 2>/dev/null || nmcli networking on 2>/dev/null || true
 fi
 
-# 3. Forçar todas as interfaces wireless (wlan0, etc.) para estado UP
 for iface in $(ip -o link show 2>/dev/null | awk -F': ' '{print $2}' | grep -E '^wl'); do
     sudo ip link set "$iface" up 2>/dev/null || ip link set "$iface" up 2>/dev/null || true
 done
 
-# 4. Disparar pedido ativo de varrimento de redes para associação imediata
 if command -v nmcli >/dev/null 2>&1; then
-    sudo nmcli device wifi rescan 2>/dev/null || nmcli device wifi rescan 2>/dev/null || true
+    sudo nmcli device connect wlan0 2>/dev/null || true
+    sudo nmcli device wifi rescan 2>/dev/null || true
 elif command -v wpa_cli >/dev/null 2>&1; then
-    sudo wpa_cli -i wlan0 reassociate 2>/dev/null || wpa_cli -i wlan0 reassociate 2>/dev/null || true
+    sudo wpa_cli -i wlan0 reassociate 2>/dev/null || true
 fi
 
-# Pequena pausa para o firmware e rádio estabilizarem após o unblock
 sleep 2
 
-# Função inteligente de deteção de conectividade Wi-Fi (sem falsos negativos)
 check_wifi_connection() {
-    # 1. Validação via NetworkManager
+    # 1. NetworkManager status
     if command -v nmcli >/dev/null 2>&1; then
         if nmcli -t -f TYPE,STATE dev 2>/dev/null | grep -qE '^wifi:connected'; then
             return 0
         fi
     fi
 
-    # 2. Validação por IPv4 atribuído na interface wireless (fora de 127.x e 169.254.x)
+    # 2. Assigned IPv4 on wireless interface
     local IP_WL
     IP_WL=$(ip -4 -o addr show 2>/dev/null | awk '$2 ~ /^wl/ {split($4, a, "/"); print a[1]}' | grep -vE '^(127\.|169\.254\.)' | head -n 1)
     if [ -n "$IP_WL" ]; then
         return 0
     fi
 
-    # 3. Validação clássica via ping ao Gateway ou DNS externo
+    # 3. Gateway / DNS ping check
     local GATEWAY
     GATEWAY=$(ip route show default 2>/dev/null | awk '/default via/ {print $3; exit}')
     if [ -n "$GATEWAY" ]; then
@@ -98,7 +87,6 @@ check_wifi_connection() {
 CONNECTED=0
 ELAPSED=0
 
-# Ciclo de verificação de ligação à rede por até 30 segundos
 while [ "$ELAPSED" -lt "$WIFI_TIMEOUT_SEC" ]; do
     if check_wifi_connection; then
         CONNECTED=1
@@ -108,73 +96,62 @@ while [ "$ELAPSED" -lt "$WIFI_TIMEOUT_SEC" ]; do
     sleep 1
     ELAPSED=$((ELAPSED + 1))
     
-    # Notificação periódica a cada 5 segundos
     if [ $((ELAPSED % 5)) -eq 0 ]; then
-        log "A aguardar ligação Wi-Fi... (${ELAPSED}/${WIFI_TIMEOUT_SEC}s)"
+        log "Waiting for Wi-Fi connection... (${ELAPSED}/${WIFI_TIMEOUT_SEC}s)"
     fi
 done
 
-# ==============================================================================
-# DECISÃO DE MODO
-# ==============================================================================
-
 if [ "$CONNECTED" -eq 1 ]; then
-    # --------------------------------------------------------------------------
-    # CENÁRIO A: MODO PROGRAMAÇÃO / BANCADA
-    # --------------------------------------------------------------------------
+    # Scenario A: Development / Bench Mode
     WIFI_IP=$(ip -4 -o addr show 2>/dev/null | awk '$2 ~ /^wl/ {split($4, a, "/"); print a[1]}' | head -n 1)
     log "----------------------------------------------------------"
-    log "[+] Wi-Fi DETETADO após ${ELAPSED}s! IP: ${WIFI_IP:-N/A}"
-    log "[+] A ENTRAR EM MODO PROGRAMAÇÃO / BANCADA"
+    log "[+] Wi-Fi DETECTED after ${ELAPSED}s! IP: ${WIFI_IP:-N/A}"
+    log "[+] ENTERING DEVELOPMENT / BENCH MODE"
     log "----------------------------------------------------------"
     
     if [ -d "$REPO_DIR" ]; then
-        log "A atualizar repositório local em $REPO_DIR..."
+        log "Updating local repository at $REPO_DIR..."
         cd "$REPO_DIR" || exit 1
         
         CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "untested")
-        log "Ramo ativo: $CURRENT_BRANCH"
+        log "Active branch: $CURRENT_BRANCH"
         
-        # Executa git pull da versão mais recente
         if git pull origin "$CURRENT_BRANCH"; then
-            log "[+] Repositório atualizado com sucesso!"
+            log "[+] Repository updated successfully!"
         else
-            log "[!] Aviso: Falha no git pull (possível falta de internet externa)."
+            log "[!] Warning: git pull failed (external internet may be unreachable)."
         fi
     else
-        log "[!] Diretório do repositório não encontrado em $REPO_DIR."
+        log "[!] Repository directory not found at $REPO_DIR."
     fi
 
-    log "[+] Raspberry Pi pronto para programação e testes via SSH."
-    log "[+] A câmara permanece livre e os rádios ligados."
+    log "[+] Raspberry Pi ready for development and testing via SSH."
+    log "[+] Camera remains available and radios stay active."
     exit 0
 
 else
-    # --------------------------------------------------------------------------
-    # CENÁRIO B: MODO VOO / AUTÓNOMO
-    # --------------------------------------------------------------------------
+    # Scenario B: Flight / Autonomous Mode
     log "----------------------------------------------------------"
-    log "[!] TIMEOUT de ${WIFI_TIMEOUT_SEC}s atingido sem ligação Wi-Fi."
-    log "[!] A ENTRAR EM MODO VOO / CAMPO"
+    log "[!] TIMEOUT of ${WIFI_TIMEOUT_SEC}s reached without Wi-Fi connection."
+    log "[!] ENTERING FLIGHT / FIELD MODE"
     log "----------------------------------------------------------"
 
-    log "1. A desativar emissões de rádio (Wi-Fi e Bluetooth) para eliminar interferências de RF..."
+    log "1. Disabling wireless radios (Wi-Fi and Bluetooth) for flight mode..."
     sudo rfkill block wifi 2>/dev/null || true
     sudo rfkill block bluetooth 2>/dev/null || true
     sudo systemctl stop bluetooth 2>/dev/null || true
 
-    log "2. A desativar saída de vídeo HDMI para poupança de bateria..."
+    log "2. Disabling HDMI video circuitry to save battery..."
     sudo vcgencmd display_power 0 2>/dev/null || true
 
-    log "3. A iniciar gravação contínua de voo (Matroska .mkv, anti-vibração e seguro contra quebra de energia)..."
+    log "3. Starting continuous flight recording (Matroska .mkv, anti-vibration & power-loss immune)..."
     
     RECORD_SCRIPT="${SCRIPT_DIR}/record_flight.sh"
     if [ -f "$RECORD_SCRIPT" ]; then
         chmod +x "$RECORD_SCRIPT"
-        # Substitui o processo atual pelo script de gravação para monitorização pelo systemd
         exec /bin/bash "$RECORD_SCRIPT"
     else
-        log "[!] ERRO CRÍTICO: Script $RECORD_SCRIPT não encontrado!"
+        log "[!] CRITICAL ERROR: Script $RECORD_SCRIPT not found!"
         exit 1
     fi
 fi

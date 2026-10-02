@@ -1,7 +1,7 @@
 """
-MANTA Companion Computer — Gravação Segura de Voo (Python Controller)
-Permite iniciar e monitorizar a gravação à prova de quebras de energia com
-otimizações anti-vibração para o sensor Sony IMX378-79.
+MANTA Companion Computer — Safe Flight Recorder (Python Controller)
+Manages power-loss immune flight video recording with anti-vibration
+optimizations for the Sony IMX378-79 sensor.
 """
 
 import os
@@ -21,16 +21,16 @@ def get_free_disk_mb(path):
 
 def parse_args():
     parser = argparse.ArgumentParser(description="MANTA Safe Video Recorder")
-    parser.add_argument("--output-dir", default=DEFAULT_OUTPUT_DIR, help="Diretório onde guardar os vídeos")
-    parser.add_argument("--width", type=int, default=1920, help="Largura do vídeo (padrão: 1920)")
-    parser.add_argument("--height", type=int, default=1080, help="Altura do vídeo (padrão: 1080)")
-    parser.add_argument("--fps", type=int, default=30, help="Taxa de fotogramas por segundo (padrão: 30)")
+    parser.add_argument("--output-dir", default=DEFAULT_OUTPUT_DIR, help="Directory to save video files")
+    parser.add_argument("--width", type=int, default=1920, help="Video width (default: 1920)")
+    parser.add_argument("--height", type=int, default=1080, help="Video height (default: 1080)")
+    parser.add_argument("--fps", type=int, default=30, help="Frame rate in fps (default: 30)")
     parser.add_argument("--exposure", default="sport", choices=["normal", "sport"],
-                        help="Modo de exposição (sport = prioridade obturador rápido anti-vibração)")
+                        help="Exposure mode (sport = fast shutter anti-vibration priority)")
     parser.add_argument("--shutter", type=int, default=0,
-                        help="Velocidade de obturador fixa em microssegundos (ex: 2000 = 1/500s; 0 = auto)")
+                        help="Fixed shutter speed in microseconds (e.g. 2000 = 1/500s; 0 = auto)")
     parser.add_argument("--duration", type=int, default=0,
-                        help="Duração em segundos (0 = infinito até parar ou desligar energia)")
+                        help="Recording duration in seconds (0 = infinite until stopped or power cut)")
     return parser.parse_args()
 
 def main():
@@ -39,7 +39,7 @@ def main():
 
     free_mb = get_free_disk_mb(args.output_dir)
     if free_mb < 500:
-        print(f"[!] ERRO: Apenas {free_mb} MB livres em {args.output_dir}. Mínimo 500 MB.")
+        print(f"[!] ERROR: Only {free_mb} MB available in {args.output_dir}. Minimum 500 MB required.")
         sys.exit(1)
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -70,26 +70,26 @@ def main():
         cmd.extend(["--shutter", str(args.shutter)])
 
     print("=" * 65)
-    print(" MANTA UAV — Gravação Segura de Voo (Anti-Vibração & Power-Loss Safe)")
-    print(f" Destino: {out_filename}")
-    print(f" Resolução: {args.width}x{args.height} @ {args.fps}fps | Exposição: {args.exposure}")
+    print(" MANTA UAV — Safe Flight Recording (Anti-Vibration & Power-Loss Safe)")
+    print(f" Target: {out_filename}")
+    print(f" Resolution: {args.width}x{args.height} @ {args.fps}fps | Exposure: {args.exposure}")
     if args.shutter > 0:
-        print(f" Shutter fixo: {args.shutter} µs (1/{1_000_000 // args.shutter}s)")
-    print(f" Espaço em disco disponível: {free_mb} MB")
-    print(" Formato: Matroska (.mkv) com flush síncrono para imunidade a corte")
+        print(f" Fixed Shutter: {args.shutter} µs (1/{1_000_000 // args.shutter}s)")
+    print(f" Free disk space: {free_mb} MB")
+    print(" Format: Matroska (.mkv) with synchronous buffer flush")
     print("=" * 65)
 
     proc = subprocess.Popen(cmd)
 
     def sig_handler(signum, frame):
-        print("\n[*] Sinal de encerramento recebido. A fechar gravação...")
+        print("\n[*] Shutdown signal received. Closing recording safely...")
         proc.terminate()
         try:
             proc.wait(timeout=3)
         except subprocess.TimeoutExpired:
             proc.kill()
         subprocess.run(["sync"])
-        print(f"[+] Vídeo gravado com sucesso: {out_filename}")
+        print(f"[+] Video saved successfully: {out_filename}")
         sys.exit(0)
 
     signal.signal(signal.SIGINT, sig_handler)
@@ -101,7 +101,7 @@ def main():
         sig_handler(None, None)
 
     subprocess.run(["sync"])
-    print(f"[+] Gravação terminada: {out_filename}")
+    print(f"[+] Recording finished: {out_filename}")
 
 if __name__ == "__main__":
     main()

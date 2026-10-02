@@ -1,23 +1,8 @@
 #!/usr/bin/env python3
 """
-MANTA UAV — Script Resiliente de Descarregamento de Vídeos do Raspberry Pi
-==========================================================================
-Características:
-1. Deteção & Espera Automática: Se o Pi estiver a arrancar ou temporariamente
-   offline, aguarda ativamente até que fique acessível por ping/SSH.
-2. Transferência Resiliente (Chunked Streaming): NÃO usa prefetch(), evitando
-   sobrecarregar a RAM (512MB) do RPi 3 A+ e o chip de Wi-Fi 2.4GHz.
-3. Retoma Automática (Resume / Partial Download): Se a ligação cair a meio
-   de um vídeo de 1GB aos 85%, reconecta e retoma exatamente nos 85% sem
-   perder nada do que já foi transferido.
-4. Auto-Reconexão com Backoff: Se o Wi-Fi cair, tenta reconectar até 10 vezes
-   e prossegue a partir do byte exato.
-5. Verificação de Integridade: Confirma o tamanho final de cada vídeo.
-6. Conversão Automática para MP4: Converte vídeos .mkv para .mp4 de forma
-   sem perdas (lossless remux) imediatamente após o descarregamento.
-7. Limpeza Segura do .mkv Local: Apaga o .mkv local após validação do .mp4
-   para libertar espaço em disco. Os vídeos no Raspberry Pi NUNCA são apagados
-   automaticamente (o utilizador apaga manualmente se/quando quiser).
+MANTA UAV — Resilient Flight Video Downloader
+Downloads flight recordings from Raspberry Pi via SFTP with chunked streaming,
+automatic resume on reconnection, and lossless MP4 conversion.
 """
 
 import os
@@ -27,6 +12,8 @@ import time
 import socket
 import paramiko
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor
+import argparse
 
 try:
     if sys.platform == "win32":
@@ -36,19 +23,14 @@ try:
 except Exception:
     pass
 
-# Configurações de Conexão
 DEFAULT_HOSTS = ["10.32.198.35", "manta.local"]
 RPI_USER = "pc"
 RPI_PASS = "134679"
 REMOTE_VIDEO_DIR = "/home/pc/flight_videos"
 LOCAL_DEST_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "flight_videos")
-CHUNK_SIZE = 256 * 1024  # 256 KB chunk (estável e rápido)
+CHUNK_SIZE = 256 * 1024  # 256 KB chunk
 MAX_RETRIES_PER_FILE = 20
 RETRY_DELAY_SEC = 2
-
-
-from concurrent.futures import ThreadPoolExecutor
-import argparse
 
 try:
     from convert_videos import convert_mkv_to_mp4, is_ffmpeg_available
@@ -58,7 +40,6 @@ except ImportError:
 
 
 def test_ssh_auth(ip):
-    """Testa se as credenciais do Raspberry Pi funcionam no IP."""
     try:
         c = paramiko.SSHClient()
         c.set_missing_host_key_policy(paramiko.AutoAddPolicy())
@@ -70,7 +51,6 @@ def test_ssh_auth(ip):
 
 
 def check_ip_candidate(ip):
-    """Verifica porta 22 e autenticação rápida."""
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         s.settimeout(0.3)
@@ -85,7 +65,6 @@ def check_ip_candidate(ip):
 
 
 def resolve_host():
-    """Tenta resolver e contactar o IP do Raspberry Pi."""
     for host in DEFAULT_HOSTS:
         try:
             ip = socket.gethostbyname(host)
@@ -98,7 +77,6 @@ def resolve_host():
         except Exception:
             continue
 
-    # Varrimento rápido da subnet caso o DHCP tenha atribuído outro IP
     try:
         with ThreadPoolExecutor(max_workers=50) as ex:
             ips = [f"10.32.198.{i}" for i in range(1, 255)]
@@ -112,20 +90,19 @@ def resolve_host():
 
 
 def wait_for_pi(max_wait_sec=600):
-    """Aguarda ativamente até que o Raspberry Pi fique online na rede (até 10 minutos)."""
-    print("[*] À procura do Raspberry Pi na rede...")
+    print("[*] Searching for Raspberry Pi on the network...")
     start_time = time.time()
     last_print = 0
     while time.time() - start_time < max_wait_sec:
         host = resolve_host()
         if host:
-            print(f"[+] Raspberry Pi encontrado e acessível em: {host}!")
+            print(f"[+] Raspberry Pi found and reachable at: {host}!")
             return host
         
         now = time.time()
         if now - last_print >= 5:
             elapsed = int(now - start_time)
-            print(f"    A aguardar ligação Wi-Fi do Raspberry Pi... ({elapsed}s decorridos)")
+            print(f"    Waiting for Raspberry Pi Wi-Fi connection... ({elapsed}s elapsed)")
             last_print = now
         time.sleep(1.5)
 
@@ -133,7 +110,6 @@ def wait_for_pi(max_wait_sec=600):
 
 
 def create_sftp_client(host):
-    """Cria cliente SSH/SFTP com Keep-Alive ativo para prevenir timeouts."""
     ssh = paramiko.SSHClient()
     ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
     ssh.connect(
@@ -146,13 +122,12 @@ def create_sftp_client(host):
     )
     transport = ssh.get_transport()
     if transport:
-        transport.set_keepalive(5)  # Envia pacote keepalive a cada 5 segundos
+        transport.set_keepalive(5)
     sftp = ssh.open_sftp()
     return ssh, sftp
 
 
 def format_bytes(b):
-    """Converte bytes em string legível (KB, MB, GB)."""
     if b < 1024:
         return f"{b} B"
     elif b < 1024 * 1024:
@@ -164,28 +139,23 @@ def format_bytes(b):
 
 
 def download_single_file(host_getter, remote_path, local_path, file_size):
-    """
-    Descarrega um ficheiro remoto com suporte para retoma (resume) e auto-reconexão.
-    """
     retries = 0
     os.makedirs(os.path.dirname(local_path), exist_ok=True)
 
     while retries < MAX_RETRIES_PER_FILE:
-        # Verificar quantos bytes já existem localmente
         existing_bytes = 0
         if os.path.exists(local_path):
             existing_bytes = os.path.getsize(local_path)
             if existing_bytes == file_size and file_size > 0:
-                print(f"    [OK] Ficheiro já completo localmente ({format_bytes(file_size)}). Ignorado.")
+                print(f"    [OK] File already complete locally ({format_bytes(file_size)}). Skipped.")
                 return True
             elif existing_bytes > file_size:
-                # Ficheiro local maior que o remoto, recomeçar
                 os.remove(local_path)
                 existing_bytes = 0
 
         host = host_getter()
         if not host:
-            print(f"    [!] Pi temporariamente inacessível. Nova tentativa em {RETRY_DELAY_SEC}s...")
+            print(f"    [!] Pi temporarily unreachable. Retrying in {RETRY_DELAY_SEC}s...")
             time.sleep(RETRY_DELAY_SEC)
             retries += 1
             continue
@@ -196,10 +166,10 @@ def download_single_file(host_getter, remote_path, local_path, file_size):
             ssh, sftp = create_sftp_client(host)
             
             with sftp.open(remote_path, 'rb') as rfile:
-                # Não chamamos rfile.prefetch()! O prefetch causa memory leak e timeouts no RPi.
+                # Do not use rfile.prefetch() to prevent memory exhaustion on RPi 3 A+
                 if existing_bytes > 0:
                     rfile.seek(existing_bytes)
-                    print(f"    [+] A retomar download a partir de {format_bytes(existing_bytes)} / {format_bytes(file_size)} ({int(existing_bytes/file_size*100)}%)...")
+                    print(f"    [+] Resuming download from {format_bytes(existing_bytes)} / {format_bytes(file_size)} ({int(existing_bytes/file_size*100)}%)...")
                     mode = 'ab'
                 else:
                     mode = 'wb'
@@ -234,22 +204,22 @@ def download_single_file(host_getter, remote_path, local_path, file_size):
                             
                             sys.stdout.write(
                                 f"\r    [{bar}] {pct:5.1f}% | {format_bytes(transferred)}/{format_bytes(file_size)} | "
-                                f"{format_bytes(speed)}/s | Resta: {rem_str}   "
+                                f"{format_bytes(speed)}/s | Remaining: {rem_str}   "
                             )
                             sys.stdout.flush()
                             last_ui_time = now
 
                 print()
                 if transferred >= file_size:
-                    print(f"    [+] Download concluído com sucesso: {os.path.basename(local_path)}")
+                    print(f"    [+] Download completed successfully: {os.path.basename(local_path)}")
                     return True
                 else:
-                    print(f"    [!] Transferência incompleta ({transferred}/{file_size} bytes). A reconectar para retomar...")
+                    print(f"    [!] Transfer incomplete ({transferred}/{file_size} bytes). Reconnecting to resume...")
 
         except Exception as e:
-            print(f"\n    [!] Desconexão durante a transferência: {e}")
+            print(f"\n    [!] Disconnection during transfer: {e}")
             retries += 1
-            print(f"    [*] A aguardar reconexão (tentativa {retries}/{MAX_RETRIES_PER_FILE})...")
+            print(f"    [*] Awaiting reconnection (attempt {retries}/{MAX_RETRIES_PER_FILE})...")
             time.sleep(RETRY_DELAY_SEC)
         finally:
             if sftp:
@@ -263,59 +233,56 @@ def download_single_file(host_getter, remote_path, local_path, file_size):
                 except Exception:
                     pass
 
-    print(f"    [!] ERRO: Esgotadas as tentativas para descarregar {os.path.basename(remote_path)}")
+    print(f"    [!] ERROR: Exhausted retries downloading {os.path.basename(remote_path)}")
     return False
 
 
 def main():
-    parser = argparse.ArgumentParser(description="MANTA UAV — Descarregamento Seguro e Conversão de Vídeos de Voo")
-    parser.add_argument("--no-convert", action="store_true", help="Não converter automaticamente de .mkv para .mp4")
-    parser.add_argument("--keep-mkv", action="store_true", help="Manter o ficheiro .mkv local após a conversão para .mp4")
-    parser.add_argument("--dest", default=LOCAL_DEST_DIR, help=f"Diretório local de destino (padrão: {LOCAL_DEST_DIR})")
+    parser = argparse.ArgumentParser(description="MANTA UAV — Safe Flight Video Downloader & Converter")
+    parser.add_argument("--no-convert", action="store_true", help="Do not automatically convert .mkv to .mp4")
+    parser.add_argument("--keep-mkv", action="store_true", help="Keep local .mkv file after .mp4 conversion")
+    parser.add_argument("--dest", default=LOCAL_DEST_DIR, help=f"Local destination directory (default: {LOCAL_DEST_DIR})")
     args = parser.parse_args()
 
     dest_dir = os.path.abspath(args.dest)
     os.makedirs(dest_dir, exist_ok=True)
 
     print("=" * 70)
-    print(" MANTA UAV — Descarregamento Seguro e Resiliente de Vídeos de Voo")
+    print(" MANTA UAV — Resilient Flight Video Downloader")
     print("=" * 70)
-    print(f" Pasta de destino no PC: {dest_dir}")
+    print(f" Local destination: {dest_dir}")
     if not args.no_convert:
         if is_ffmpeg_available():
-            print(" Conversão automática MP4: ATIVA (Lossless Remuxing)")
-            print(f" Gestão de ficheiros locais: .mkv local será {'MANTIDO' if args.keep_mkv else 'APAGADO após validação do MP4'}")
-            print(" Gravações no Raspberry Pi: INTOCADAS (nunca são apagadas remotamente)")
+            print(" Automatic MP4 conversion: ACTIVE (Lossless Remuxing)")
+            print(f" Local file handling: Local .mkv will be {'KEPT' if args.keep_mkv else 'DELETED after MP4 verification'}")
+            print(" Remote files on Raspberry Pi: UNTOUCHED (never deleted remotely)")
         else:
-            print(" [!] Aviso: ffmpeg não encontrado no sistema. Conversão para MP4 indisponível.")
+            print(" [!] Warning: ffmpeg not found on system. MP4 conversion unavailable.")
 
-    # 1. Esperar pelo Raspberry Pi
     host = wait_for_pi(max_wait_sec=600)
     if not host:
-        print("[!] Não foi possível encontrar o Raspberry Pi na rede após 10 minutos.")
-        print("    Certifique-se de que:")
-        print("    1. O Raspberry Pi tem alimentação ligada.")
-        print("    2. O router/hotspot 'DELTA' está ativo.")
-        print("    3. Se o Pi entrou em Modo Voo (LED Wi-Fi apagado), reinicie a alimentação.")
+        print("[!] Raspberry Pi not found on the network after 10 minutes.")
+        print("    Ensure:")
+        print("    1. Raspberry Pi is powered.")
+        print("    2. 'DELTA' hotspot/router is active.")
+        print("    3. If Pi entered Flight Mode (Wi-Fi LED off), power cycle it.")
         return 1
 
-    # 2. Listar ficheiros de vídeo remotos
-    print(f"[*] A obter lista de gravações em {REMOTE_VIDEO_DIR}...")
+    print(f"[*] Fetching recording list from {REMOTE_VIDEO_DIR}...")
     try:
         ssh, sftp = create_sftp_client(host)
     except Exception as e:
-        print(f"[!] Erro ao ligar ao SSH: {e}")
+        print(f"[!] SSH connection error: {e}")
         return 1
 
     try:
         remote_files = sftp.listdir_attr(REMOTE_VIDEO_DIR)
     except Exception as e:
-        print(f"[!] Erro ao aceder à pasta {REMOTE_VIDEO_DIR}: {e}")
+        print(f"[!] Error accessing {REMOTE_VIDEO_DIR}: {e}")
         sftp.close()
         ssh.close()
         return 1
 
-    # Filtrar ficheiros de vídeo (.mkv, .mp4, .h264)
     video_files = []
     for f in remote_files:
         name = f.filename
@@ -326,16 +293,16 @@ def main():
     ssh.close()
 
     if not video_files:
-        print(f"[+] Nenhum ficheiro de vídeo encontrado em {REMOTE_VIDEO_DIR}.")
+        print(f"[+] No video files found in {REMOTE_VIDEO_DIR}.")
         return 0
 
     total_size = sum(sz for _, sz in video_files)
-    print(f"[+] Encontrados {len(video_files)} vídeos (Total: {format_bytes(total_size)}):")
+    print(f"[+] Found {len(video_files)} videos (Total: {format_bytes(total_size)}):")
     for idx, (vname, sz) in enumerate(video_files, 1):
         print(f"    {idx}. {vname} ({format_bytes(sz)})")
 
     print("-" * 70)
-    print("[*] A iniciar transferência com proteção anti-queda e retoma contínua...")
+    print("[*] Starting resilient download...")
 
     def get_active_host():
         h = resolve_host()
@@ -349,34 +316,31 @@ def main():
         local_file_path = os.path.join(dest_dir, vname)
         base_name, ext = os.path.splitext(vname)
 
-        # Se for um .mkv e a conversão estiver ativa, verificar se já temos o .mp4 local correspondente
         if ext.lower() == ".mkv" and not args.no_convert:
             local_mp4_path = os.path.join(dest_dir, f"{base_name}.mp4")
             if os.path.exists(local_mp4_path) and os.path.getsize(local_mp4_path) > 1024:
-                print(f"\n[{idx}/{len(video_files)}] [OK] {vname} já descarregado e convertido (.mp4 existente: {os.path.basename(local_mp4_path)}). Ignorado.")
+                print(f"\n[{idx}/{len(video_files)}] [OK] {vname} already downloaded and converted (.mp4 exists: {os.path.basename(local_mp4_path)}). Skipped.")
                 success_count += 1
                 continue
 
-        print(f"\n[{idx}/{len(video_files)}] A transferir: {vname} ({format_bytes(sz)})")
+        print(f"\n[{idx}/{len(video_files)}] Downloading: {vname} ({format_bytes(sz)})")
 
         if download_single_file(get_active_host, remote_file_path, local_file_path, sz):
             success_count += 1
 
-            # Pós-processamento automático: Conversão para MP4 e eliminação do .mkv LOCAL
             if ext.lower() == ".mkv" and not args.no_convert and is_ffmpeg_available():
-                print(f"    [*] A converter {vname} para MP4...")
+                print(f"    [*] Converting {vname} to MP4...")
                 conv_ok, mp4_file = convert_mkv_to_mp4(local_file_path, delete_original=not args.keep_mkv, verbose=True)
                 if conv_ok:
-                    print(f"    [+] Vídeo pronto em: {os.path.basename(mp4_file)}")
+                    print(f"    [+] Video ready at: {os.path.basename(mp4_file)}")
                 else:
-                    print(f"    [!] Aviso: Falha na conversão para MP4. O ficheiro .mkv local foi preservado.")
+                    print("    [!] Warning: Failed MP4 conversion. Local .mkv preserved.")
 
     print("\n" + "=" * 70)
-    print(f" PROCESSO CONCLUÍDO: {success_count}/{len(video_files)} vídeos descarregados e preparados.")
-    print(f" Destino local: {dest_dir}")
+    print(f" PROCESS COMPLETE: {success_count}/{len(video_files)} videos downloaded and prepared.")
+    print(f" Local destination: {dest_dir}")
     print("=" * 70)
 
-    # Abrir a pasta no Explorer
     try:
         os.startfile(dest_dir)
     except Exception:

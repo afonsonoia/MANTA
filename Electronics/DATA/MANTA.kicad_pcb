@@ -7584,7 +7584,7 @@
 			)
 		)
 	)
-	(gr_text "Afonso Nóia"
+	(gr_text "Afonso Noia"
 		(at 30.5 76.5 0)
 		(layer "F.SilkS")
 		(uuid "1a15c887-30bd-4112-ba96-1729373989b3")

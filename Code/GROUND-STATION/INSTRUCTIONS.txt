@@ -1,0 +1,17 @@
+================================================================
+          MANTA GROUND STATION - QUICK START GUIDE
+================================================================
+
+1. INSTALL PYTHON DEPENDENCIES:
+   In your terminal / command prompt, run:
+   pip install -r requirements.txt
+
+2. PREREQUISITES:
+   - Have Mission Planner installed (optional, but recommended for HUD and MAVLink).
+   - Connect Ground Station ESP32 via USB (ensure drivers are installed, e.g. CH340 / CP210x).
+
+3. EXECUTE:
+   python MANTA_MISSION_PLANNER.py
+
+   (To specify a COM port manually:)
+   python MANTA_MISSION_PLANNER.py --port COM4

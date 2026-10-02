@@ -2,6 +2,7 @@
 #include "bmp280.h"
 #include "config.h"
 #include "control.h"
+#include "gps.h"
 #include "mpu6050.h"
 #include "network.h"
 #include "receiver.h"
@@ -18,6 +19,10 @@ void setup() {
   delay(400);
   digitalWrite(2, LOW);
 
+  // Initialize Hardware UART0 Serial port for debug & diagnostics
+  Serial.begin(115200);
+  delay(10);
+
   // Disable unused Wi-Fi & Bluetooth radios to minimize power consumption
   WiFi.mode(WIFI_OFF);
   btStop();
@@ -27,11 +32,17 @@ void setup() {
   initBMP280();
   initReceiver();
   initControlSystem();
+  initGPS();
   initNetwork();
 }
 
 void loop() {
+  // Continuously drain GPS UART and i-Bus RX FIFOs to prevent frame loss
+  updateGPS();
+  updateReceiver();
+
   unsigned long currentMillis = millis();
+
 
   // 1. High frequency uniform IMU sampling every 10ms (100 Hz sampling rate)
   if (currentMillis - lastSampleMillis >= SAMPLE_INTERVAL_MS) {
@@ -46,13 +57,13 @@ void loop() {
   }
 
 
-  // Sample BMP280 barometer every 1000ms (1 Hz) on independent timer
-  if (currentMillis - lastBaroSampleMillis >= 1000) {
+  // Sample BMP280 barometer every 100ms (10 Hz) on independent timer matching failsafe & telemetry
+  if (currentMillis - lastBaroSampleMillis >= BARO_SAMPLE_INTERVAL_MS) {
     lastBaroSampleMillis = currentMillis;
     sampleBMP280();
   }
 
-  // 2. Broadcast telemetry at 20 Hz (every 50ms)
+  // 2. Broadcast telemetry at 5.0 Hz (every 200ms)
   if (currentMillis - lastLoggingMillis >= LOGGING_INTERVAL_MS) {
     lastLoggingMillis = currentMillis;
 
@@ -69,6 +80,11 @@ void loop() {
     float baroAlt = 0.0f, baroPressure = 0.0f, baroTemp = 0.0f;
     getBaroData(baroAlt, baroPressure, baroTemp);
 
+    int32_t latE7 = 0, lonE7 = 0;
+    int16_t gpsAltX10 = 0;
+    uint8_t satellites = 0, fixType = 0;
+    getGPSData(latE7, lonE7, gpsAltX10, satellites, fixType);
+
     // RC channels: 0 means no signal received yet from the ISR
     uint16_t rch1 = 0, rch2 = 0, rch3 = 0, rch5 = 0;
     getReceiverChannels(rch1, rch2, rch3, rch5);
@@ -83,6 +99,7 @@ void loop() {
 
     bool isLowVolt = isLowVoltageCutoffTriggered();
     bool isEscActive = isExtremumSeekingActive();
+    FailsafeStage fsStage = getActiveFailsafeStage();
 
     float pKp = 0.0f, pKi = 0.0f, pKd = 0.0f;
     float rKp = 0.0f, rKi = 0.0f, rKd = 0.0f;
@@ -96,8 +113,11 @@ void loop() {
         rch1, rch2, rch3, rch5,
         (uint16_t)srvBR, (uint16_t)srvBL, (uint16_t)srvFR, (uint16_t)srvFL, (uint16_t)escThrot,
         batteryVoltage, baroAlt,
+        latE7, lonE7, gpsAltX10,
+        satellites, fixType,
         rcLost, flaperonActive, isLowVolt,
         isEscActive, (uint8_t)fMode,
+        (uint8_t)fsStage,
         pKp, pKi, pKd,
         rKp, rKi, rKd
     );

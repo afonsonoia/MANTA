@@ -13,10 +13,10 @@ constexpr int LORA_DIO0 = 4;
 
 // LoRa Radio Parameters - Dedicated Simplex RX (Downlink Telemetry from MANTA)
 constexpr long LORA_BAND = 433E6;        // Frequency: 433 MHz
-constexpr int LORA_TX_POWER = 17;        // Nominal PA setting (Ground Station operates strictly in RX mode)
-constexpr int LORA_SF = 7;               // Spreading Factor 7 (Matching MANTA)
+constexpr int LORA_TX_POWER = 20;        // Nominal PA setting (Matching MANTA 20 dBm)
+constexpr int LORA_SF = 8;               // Spreading Factor 8 (Matching MANTA +3dB sensitivity)
 constexpr long LORA_BW = 250E3;          // Bandwidth 250 kHz (Matching MANTA)
-constexpr int LORA_CR = 5;               // Coding rate 4/5
+constexpr int LORA_CR = 6;               // Coding rate 4/6 (Matching MANTA Hamming FEC)
 constexpr uint8_t LORA_SYNC_WORD = 0x12; // Matching LoRa Sync Word
 
 // Hardware Peripherals (Local Ground Station Buzzer Alarm on Pin D22)

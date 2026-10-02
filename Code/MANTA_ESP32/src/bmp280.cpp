@@ -5,11 +5,12 @@
 #include <math.h>
 
 static Adafruit_BMP280 bmp;
-static bool bmpInitialized = false;
+static portMUX_TYPE baroMux = portMUX_INITIALIZER_UNLOCKED;
+static volatile bool bmpInitialized = false;
 static float baselinePressure = -1.0f;
-static float currentAltitude = -1.0f;
-static float currentPressure = -1.0f;
-static float currentTemperature = -1.0f;
+static volatile float currentAltitude = -1.0f;
+static volatile float currentPressure = -1.0f;
+static volatile float currentTemperature = -1.0f;
 static bool firstAltitudeSample = true;
 
 void initBMP280() {
@@ -85,9 +86,6 @@ void sampleBMP280() {
   float tempC = bmp.readTemperature();
 
   if (pressureHPa > 300.0f && pressureHPa < 1200.0f) {
-    currentPressure = pressureHPa;
-    currentTemperature = tempC;
-
     // If baseline pressure was not set or invalid, adopt first valid reading
     if (baselinePressure <= 0.0f) {
       baselinePressure = pressureHPa;
@@ -97,20 +95,28 @@ void sampleBMP280() {
     float calcAlt =
         44330.0f * (1.0f - pow(pressureHPa / baselinePressure, 0.1903f));
 
+    float newAlt = calcAlt;
     // First sample assumes calculated altitude directly; subsequent samples are smoothed via EMA
     if (firstAltitudeSample) {
-      currentAltitude = calcAlt;
       firstAltitudeSample = false;
     } else {
-      currentAltitude = (0.2f * calcAlt) + (0.8f * currentAltitude);
+      newAlt = (0.2f * calcAlt) + (0.8f * currentAltitude);
     }
+
+    portENTER_CRITICAL(&baroMux);
+    currentPressure = pressureHPa;
+    currentTemperature = tempC;
+    currentAltitude = newAlt;
+    portEXIT_CRITICAL(&baroMux);
   }
 }
 
 void getBaroData(float &altitude, float &pressure, float &temperature) {
+  portENTER_CRITICAL(&baroMux);
   altitude = currentAltitude;
   pressure = currentPressure;
   temperature = currentTemperature;
+  portEXIT_CRITICAL(&baroMux);
 }
 
 bool isBMP280Available() { return bmpInitialized; }

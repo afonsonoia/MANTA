@@ -80,10 +80,12 @@ def main():
             except Exception:
                 pass
 
-            # Generate smooth test motion: Pitch +/- 20 deg, Roll +/- 30 deg
+            # Generate smooth test motion: Pitch +/- 20 deg, Roll +/- 30 deg, Alt 15-35m
             roll_deg = 30.0 * math.sin(elapsed * 1.5)
             pitch_deg = 20.0 * math.cos(elapsed * 1.0)
             yaw_deg = (elapsed * 10.0) % 360.0
+            alt_m = 25.0 + 10.0 * math.sin(elapsed * 0.5)
+            alt_mm = int(alt_m * 1000)
 
             mav.mav.attitude_send(
                 time_boot_ms,
@@ -93,8 +95,20 @@ def main():
                 0.0, 0.0, 0.0 # angular speeds
             )
 
+            mav.mav.vfr_hud_send(
+                12.0, 12.0, int(yaw_deg), 50, alt_m, 0.0
+            )
 
-            print(f"\r[Streaming to Mission Planner] Roll: {roll_deg:+6.1f}° | Pitch: {pitch_deg:+6.1f}° | Yaw: {yaw_deg:5.1f}°", end="")
+            mav.mav.global_position_int_send(
+                time_boot_ms,
+                0, 0,
+                alt_mm,
+                alt_mm,
+                0, 0, 0,
+                int(yaw_deg * 100)
+            )
+
+            print(f"\r[Streaming to Mission Planner] Roll: {roll_deg:+6.1f}° | Pitch: {pitch_deg:+6.1f}° | Yaw: {yaw_deg:5.1f}° | Alt: {alt_m:5.1f}m", end="")
             time.sleep(0.02) # 50 Hz refresh rate
             
     except KeyboardInterrupt:

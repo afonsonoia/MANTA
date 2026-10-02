@@ -13,21 +13,35 @@ import struct
 # 3CH (Legacy, 31 bytes): Magic 'MT' (2s), pitch_x10 (h), roll_x10 (h), 6 IMU (6h), 3 RC (3H), bat_v_x100 (H), alt_x10 (h), flags (B), crc16 (H)
 # 5CH (Legacy, 35 bytes): Magic 'MT' (2s), pitch_x10 (h), roll_x10 (h), 6 IMU (6h), 5 RC (5H), bat_v_x100 (H), alt_x10 (h), flags (B), crc16 (H)
 
-PACKET_FORMAT_PID = "<2sBIhh6h4H5HHhBB6HH"        # 61 bytes (Default with dynamic PID)
-PACKET_FORMAT_61B = PACKET_FORMAT_PID              # 61 bytes (Default)
-PACKET_FORMAT_49B = "<2sBIhh6h4H5HHhBBH"           # 49 bytes (Legacy without PID)
-PACKET_FORMAT_61B_GPS = "<2sBIhh6h4H5HHhiihBBBBH"  # 61 bytes (Legacy with GPS)
-PACKET_FORMAT_4CH = "<2shh6h4HHhBH"                # 33 bytes
-PACKET_FORMAT_3CH = "<2shh6h3HHhBH"                # 31 bytes
-PACKET_FORMAT_5CH = "<2shh6h5HHhBH"                # 35 bytes
+PACKET_FORMAT_74B = "<2sBIhh6h4H5HHhiihBBBBB6HH"  # 74 bytes (GPS + PID + Failsafe Stage + Full Actuators + IMU)
+PACKET_FORMAT_73B = "<2sBIhh6h4H5HHhiihBBBB6HH"   # 73 bytes (Legacy GPS + PID)
+PACKET_FORMAT_PID = "<2sBIhh6h4H5HHhBB6HH"         # 61 bytes (Legacy default with dynamic PID)
+PACKET_FORMAT_61B = PACKET_FORMAT_PID              # 61 bytes (Legacy)
+PACKET_FORMAT_49B = "<2sBIhh6h4H5HHhBBH"            # 49 bytes (Legacy without PID)
+PACKET_FORMAT_61B_GPS = "<2sBIhh6h4H5HHhiihBBBBH"   # 61 bytes (Legacy with GPS)
+PACKET_FORMAT_4CH = "<2shh6h4HHhBH"                 # 33 bytes
+PACKET_FORMAT_3CH = "<2shh6h3HHhBH"                 # 31 bytes
+PACKET_FORMAT_5CH = "<2shh6h5HHhBH"                 # 35 bytes
 
-TELEMETRY_PACKET_FORMAT = PACKET_FORMAT_PID
-TELEMETRY_PACKET_SIZE = struct.calcsize(PACKET_FORMAT_PID)  # 61 bytes
+TELEMETRY_PACKET_FORMAT = PACKET_FORMAT_74B
+TELEMETRY_PACKET_SIZE = struct.calcsize(PACKET_FORMAT_74B)  # 74 bytes
 PACKET_SIZE = TELEMETRY_PACKET_SIZE
-SUPPORTED_PACKET_SIZES = [61, 49, 33, 31, 35]
-SUPPORTED_PACKET_SIZES_DESC = (61, 49, 35, 33, 31)
+SUPPORTED_PACKET_SIZES = [74, 73, 61, 49, 33, 31, 35]
+SUPPORTED_PACKET_SIZES_DESC = (74, 73, 61, 49, 35, 33, 31)
+
+FAILSAFE_STAGE_NAMES = {
+    0: "INACTIVE",
+    1: "GROUND",
+    2: "CLIMB",
+    3: "LOITER",
+    4: "DESCEND"
+}
 
 # Pre-compiled Struct instances for zero-allocation parsing
+STRUCT_74B = struct.Struct(PACKET_FORMAT_74B)
+STRUCT_74B_NO_CRC = struct.Struct(PACKET_FORMAT_74B[:-1])
+STRUCT_73B = struct.Struct(PACKET_FORMAT_73B)
+STRUCT_73B_NO_CRC = struct.Struct(PACKET_FORMAT_73B[:-1])
 STRUCT_PID = struct.Struct(PACKET_FORMAT_PID)
 STRUCT_PID_NO_CRC = struct.Struct(PACKET_FORMAT_PID[:-1])
 STRUCT_49B = struct.Struct(PACKET_FORMAT_49B)
@@ -81,27 +95,26 @@ CRC16_TABLE = (
 def decode_ch5_mode(ch5_pwm: int):
     """
     Decodes CH5 PWM into (mode_number: int, flaperon_on: bool, mode_name: str)
-    SWC (Pos 1, 2, 3) + SWB (OFF, ON) medido e calibrado:
-      SWC 1 + SWB OFF: ~1166 us -> Modo 1 + Flaperons OFF (Pitch Manual + Roll Assist)
-      SWC 2 + SWB OFF: ~1328 us -> Modo 2 (FBW Fixo) + Flaperons OFF (Pitch & Roll FBW Fixo)
-      SWC 3 + SWB OFF: ~1411 us -> Modo 3 (ESC PI-D) + Flaperons OFF (Pitch & Roll ESC PI-D)
-      SWC 1 + SWB ON:  ~1541 us -> Modo 1 + Flaperons ON  (Pitch Manual + Roll Assist + Flaps 15 deg DOWN)
-      SWC 2 + SWB ON:  ~1825 us -> Modo 2 (FBW Fixo) + Flaperons ON  (Pitch & Roll FBW Fixo + Flaps 15 deg DOWN)
-      SWC 3 + SWB ON:  ~1942 us -> Modo 2 (Auto Flap-Safe) + Flaperons ON (Safety: Modo 3 demoted to 2)
+    SWC (Pos 1, 2, 3) + SWB (OFF, ON) calibrated:
+      SWC 1 + SWB OFF: ~1166 us -> Mode 1 + Flaperons OFF (Pitch Manual + Roll Assist)
+      SWC 2 + SWB OFF: ~1328 us -> Mode 2 (Fixed FBW) + Flaperons OFF (Pitch & Roll Fixed FBW)
+      SWC 3 + SWB OFF: ~1411 us -> Mode 3 (ESC PI-D) + Flaperons OFF (Pitch & Roll ESC PI-D)
+      SWC 1 + SWB ON:  ~1541 us -> Mode 1 + Flaperons ON  (Pitch Manual + Roll Assist + Flaperons DOWN)
+      SWC 2 + SWB ON:  ~1825 us -> Mode 2 (Fixed FBW) + Flaperons ON  (Pitch & Roll Fixed FBW + Flaperons DOWN)
+      SWC 3 + SWB ON:  ~1942 us -> Mode 2 (Auto Flap-Safe) + Flaperons ON (Safety: Mode 3 demoted to 2)
     """
     if ch5_pwm < 1247:
-        return 1, False, "Modo 1 + Flaperons OFF"
+        return 1, False, "Mode 1 + Flaperons OFF"
     elif ch5_pwm < 1370:
-        return 2, False, "Modo 2 (FBW Fixo) + Flaperons OFF"
+        return 2, False, "Mode 2 (Fixed FBW) + Flaperons OFF"
     elif ch5_pwm < 1476:
-        return 3, False, "Modo 3 (ESC PI-D) + Flaperons OFF"
+        return 3, False, "Mode 3 (ESC PI-D) + Flaperons OFF"
     elif ch5_pwm < 1683:
-        return 1, True, "Modo 1 + Flaperons ON"
+        return 1, True, "Mode 1 + Flaperons ON"
     elif ch5_pwm < 1884:
-        return 2, True, "Modo 2 (FBW Fixo) + Flaperons ON"
+        return 2, True, "Mode 2 (Fixed FBW) + Flaperons ON"
     else:
-        # Rule: When flaperons are ON, Mode 3 cannot be active -> Auto-demoted to Mode 2!
-        return 2, True, "Modo 2 (Auto Flap-Safe) + Flaperons ON"
+        return 2, True, "Mode 2 (Auto Flap-Safe) + Flaperons ON"
 
 
 def calculate_crc16(data: bytes) -> int:
@@ -120,6 +133,7 @@ def encode_telemetry(
     lat: float = 0.0, lon: float = 0.0, gps_alt: float = 0.0,
     satellites: int = 0, gps_fix: int = 0,
     rc_signal_lost: bool = False,
+    rc_data_received: bool | None = None,
     pkt_seq: int = 0,
     timestamp_ms: int = 0,
     servo_br: int = 1500,
@@ -133,6 +147,7 @@ def encode_telemetry(
     is_low_volt: bool = False,
     is_esc_active: bool = False,
     flight_mode: int = 1,
+    failsafe_stage: int = 0,
     pitch_kp: float = 9.35,
     pitch_ki: float = 5.00,
     pitch_kd: float = 0.623,
@@ -140,7 +155,7 @@ def encode_telemetry(
     roll_ki: float = 5.00,
     roll_kd: float = 1.500,
     legacy_format: bool = False,
-    packet_format: str = "61B"
+    packet_format: str = "74B"
 ) -> bytes:
     if legacy_format or packet_format == "4CH":
         pitch_x10 = int(round(pitch * 10))
@@ -211,11 +226,13 @@ def encode_telemetry(
         bat_x100 = int(round(battery_v * 100))
         alt_x10 = int(round(alt * 10))
         assist_flag = is_assist_mode or flaperon_active or roll_active
+        rc_rec_flag = (not rc_signal_lost) if rc_data_received is None else rc_data_received
         flags = (
             (1 if rc_signal_lost else 0) |
             (2 if assist_flag else 0) |
             (4 if is_low_volt else 0) |
-            (8 if is_esc_active else 0)
+            (8 if is_esc_active else 0) |
+            (16 if rc_rec_flag else 0)
         )
         header = b"MT"
         payload_without_crc = struct.pack(
@@ -274,17 +291,124 @@ def encode_telemetry(
         crc = calculate_crc16(payload_without_crc)
         return payload_without_crc + struct.pack("<H", crc)
 
-    # Default 61-byte format with dynamic PID gains
+    if packet_format in ("61B", "PID", "61B_PID"):
+        # Legacy 61-byte format with dynamic PID gains
+        pitch_x10 = int(round(pitch * 10))
+        roll_x10 = int(round(roll * 10))
+        bat_x100 = int(round(battery_v * 100))
+        alt_x10 = int(round(alt * 10))
+        assist_flag = is_assist_mode or flaperon_active or roll_active
+        rc_rec_flag = (not rc_signal_lost) if rc_data_received is None else rc_data_received
+        flags = (
+            (1 if rc_signal_lost else 0) |
+            (2 if assist_flag else 0) |
+            (4 if is_low_volt else 0) |
+            (8 if is_esc_active else 0) |
+            (16 if rc_rec_flag else 0)
+        )
+        pkp_x100 = int(round(pitch_kp * 100))
+        pki_x100 = int(round(pitch_ki * 100))
+        pkd_x1000 = int(round(pitch_kd * 1000))
+        rkp_x100 = int(round(roll_kp * 100))
+        rki_x100 = int(round(roll_ki * 100))
+        rkd_x1000 = int(round(roll_kd * 1000))
+
+        header = b"MT"
+        payload_without_crc = struct.pack(
+            PACKET_FORMAT_PID[:-1],
+            header,
+            pkt_seq & 0xFF,
+            timestamp_ms & 0xFFFFFFFF,
+            pitch_x10, roll_x10,
+            accel_x, accel_y, accel_z,
+            gyro_x, gyro_y, gyro_z,
+            rc1, rc2, rc3, rc5,
+            servo_br, servo_bl, servo_fr, servo_fl, esc_throttle,
+            bat_x100,
+            alt_x10,
+            flags,
+            flight_mode & 0xFF,
+            pkp_x100,
+            pki_x100,
+            pkd_x1000,
+            rkp_x100,
+            rki_x100,
+            rkd_x1000
+        )
+        crc = calculate_crc16(payload_without_crc)
+        return payload_without_crc + struct.pack("<H", crc)
+
+    if packet_format == "73B":
+        # Legacy 73-byte format with GPS, IMU, Actuators, Battery, Alt, Flags, Flight Mode and dynamic PID gains (without failsafe stage)
+        pitch_x10 = int(round(pitch * 10))
+        roll_x10 = int(round(roll * 10))
+        bat_x100 = int(round(battery_v * 100))
+        alt_x10 = int(round(alt * 10))
+        lat_e7 = int(round(lat * 1e7))
+        lon_e7 = int(round(lon * 1e7))
+        gps_alt_x10 = int(round(gps_alt * 10))
+        assist_flag = is_assist_mode or flaperon_active or roll_active
+        rc_rec_flag = (not rc_signal_lost) if rc_data_received is None else rc_data_received
+        flags = (
+            (1 if rc_signal_lost else 0) |
+            (2 if assist_flag else 0) |
+            (4 if is_low_volt else 0) |
+            (8 if is_esc_active else 0) |
+            (16 if rc_rec_flag else 0)
+        )
+        pkp_x100 = int(round(pitch_kp * 100))
+        pki_x100 = int(round(pitch_ki * 100))
+        pkd_x1000 = int(round(pitch_kd * 1000))
+        rkp_x100 = int(round(roll_kp * 100))
+        rki_x100 = int(round(roll_ki * 100))
+        rkd_x1000 = int(round(roll_kd * 1000))
+
+        header = b"MT"
+        payload_without_crc = struct.pack(
+            PACKET_FORMAT_73B[:-1],
+            header,
+            pkt_seq & 0xFF,
+            timestamp_ms & 0xFFFFFFFF,
+            pitch_x10, roll_x10,
+            accel_x, accel_y, accel_z,
+            gyro_x, gyro_y, gyro_z,
+            rc1, rc2, rc3, rc5,
+            servo_br, servo_bl, servo_fr, servo_fl, esc_throttle,
+            bat_x100,
+            alt_x10,
+            lat_e7,
+            lon_e7,
+            gps_alt_x10,
+            satellites & 0xFF,
+            gps_fix & 0xFF,
+            flags,
+            flight_mode & 0xFF,
+            pkp_x100,
+            pki_x100,
+            pkd_x1000,
+            rkp_x100,
+            rki_x100,
+            rkd_x1000
+        )
+        crc = calculate_crc16(payload_without_crc)
+        return payload_without_crc + struct.pack("<H", crc)
+
+    # Primary 74-byte format with GPS, IMU, Actuators, Battery, Alt, Flags, Flight Mode, Failsafe Stage and dynamic PID gains
     pitch_x10 = int(round(pitch * 10))
     roll_x10 = int(round(roll * 10))
     bat_x100 = int(round(battery_v * 100))
     alt_x10 = int(round(alt * 10))
+    lat_e7 = int(round(lat * 1e7))
+    lon_e7 = int(round(lon * 1e7))
+    gps_alt_x10 = int(round(gps_alt * 10))
     assist_flag = is_assist_mode or flaperon_active or roll_active
+    rc_rec_flag = (not rc_signal_lost) if rc_data_received is None else rc_data_received
     flags = (
         (1 if rc_signal_lost else 0) |
         (2 if assist_flag else 0) |
         (4 if is_low_volt else 0) |
-        (8 if is_esc_active else 0)
+        (8 if is_esc_active else 0) |
+        (16 if rc_rec_flag else 0)
     )
     pkp_x100 = int(round(pitch_kp * 100))
     pki_x100 = int(round(pitch_ki * 100))
@@ -295,7 +419,7 @@ def encode_telemetry(
 
     header = b"MT"
     payload_without_crc = struct.pack(
-        PACKET_FORMAT_PID[:-1],
+        PACKET_FORMAT_74B[:-1],
         header,
         pkt_seq & 0xFF,
         timestamp_ms & 0xFFFFFFFF,
@@ -306,8 +430,14 @@ def encode_telemetry(
         servo_br, servo_bl, servo_fr, servo_fl, esc_throttle,
         bat_x100,
         alt_x10,
+        lat_e7,
+        lon_e7,
+        gps_alt_x10,
+        satellites & 0xFF,
+        gps_fix & 0xFF,
         flags,
         flight_mode & 0xFF,
+        failsafe_stage & 0xFF,
         pkp_x100,
         pki_x100,
         pkd_x1000,
@@ -331,6 +461,219 @@ def decode_telemetry(packet_bytes: bytes) -> dict | None:
     computed_crc = calculate_crc16(packet_bytes[:-2])
     if received_crc != computed_crc:
         return None
+
+    if len(packet_bytes) == 74:
+        unpacked = STRUCT_74B.unpack(packet_bytes)
+        pkt_seq = unpacked[1]
+        timestamp_ms = unpacked[2]
+        pitch = round(unpacked[3] / 10.0, 1)
+        roll = round(unpacked[4] / 10.0, 1)
+        ax, ay, az = unpacked[5], unpacked[6], unpacked[7]
+        gx, gy, gz = unpacked[8], unpacked[9], unpacked[10]
+        rc1, rc2, rc3, rc5 = unpacked[11], unpacked[12], unpacked[13], unpacked[14]
+        srv_br, srv_bl, srv_fr, srv_fl, esc_throt = (
+            unpacked[15], unpacked[16], unpacked[17], unpacked[18], unpacked[19]
+        )
+        bat_v = round(unpacked[20] / 100.0, 2)
+        alt = round(unpacked[21] / 10.0, 1)
+        lat_e7 = unpacked[22]
+        lon_e7 = unpacked[23]
+        lat = round(lat_e7 / 1e7, 7)
+        lon = round(lon_e7 / 1e7, 7)
+        gps_alt = round(unpacked[24] / 10.0, 1)
+        sats = unpacked[25]
+        fix_type = unpacked[26]
+        flags = unpacked[27]
+        f_mode = unpacked[28]
+        fs_stage = unpacked[29]
+        pkp = round(unpacked[30] / 100.0, 2)
+        pki = round(unpacked[31] / 100.0, 2)
+        pkd = round(unpacked[32] / 1000.0, 3)
+        rkp = round(unpacked[33] / 100.0, 2)
+        rki = round(unpacked[34] / 100.0, 2)
+        rkd = round(unpacked[35] / 1000.0, 3)
+
+        sig_lost = bool(flags & 0x01)
+        flaperon_act = bool(flags & 0x02)
+        low_v = bool(flags & 0x04)
+        esc_act = bool(flags & 0x08)
+        rc_rec = bool(flags & 0x10) if (flags & 0x10) else (not sig_lost and (flags & 0x01 == 0))
+
+        return {
+            "pkt_seq": pkt_seq,
+            "timestamp_ms": timestamp_ms,
+            "pitch": pitch,
+            "roll": roll,
+            "accel_x": ax,
+            "accel_y": ay,
+            "accel_z": az,
+            "gyro_x": gx,
+            "gyro_y": gy,
+            "gyro_z": gz,
+            "rc": [rc1, rc2, rc3, rc5],
+            "rc1": rc1,
+            "rc2": rc2,
+            "rc3": rc3,
+            "rc5": rc5,
+            "servo_br": srv_br,
+            "servo_bl": srv_bl,
+            "servo_fr": srv_fr,
+            "servo_fl": srv_fl,
+            "esc_throttle": esc_throt,
+            "servos": [srv_br, srv_bl, srv_fr, srv_fl, esc_throt],
+            "batteryVoltage": bat_v,
+            "battery_v": bat_v,
+            "alt": alt,
+            "lat": lat,
+            "latitude": lat,
+            "lat_e7": lat_e7,
+            "lon": lon,
+            "longitude": lon,
+            "lon_e7": lon_e7,
+            "gps_alt": gps_alt,
+            "satellites": sats,
+            "sats": sats,
+            "fix_type": fix_type,
+            "fixType": fix_type,
+            "gps_fixed": (fix_type > 0),
+            "rcSignalLost": sig_lost,
+            "rc_signal_lost": sig_lost,
+            "rc_data_received": rc_rec,
+            "rc_received": rc_rec,
+            "rc_connected": rc_rec,
+            "rcDataReceived": rc_rec,
+            "rcConnected": rc_rec,
+            "isAssistMode": flaperon_act,
+            "is_assist_mode": flaperon_act,
+            "rollActive": flaperon_act,
+            "roll_active": flaperon_act,
+            "flaperonActive": flaperon_act,
+            "flaperon_active": flaperon_act,
+            "flapsActive": flaperon_act,
+            "flaps_active": flaperon_act,
+            "isLowVolt": low_v,
+            "is_low_volt": low_v,
+            "isEscActive": esc_act,
+            "is_esc_active": esc_act,
+            "flightMode": f_mode,
+            "flight_mode": f_mode,
+            "failsafeStage": fs_stage,
+            "failsafe_stage": fs_stage,
+            "failsafe_stage_name": FAILSAFE_STAGE_NAMES.get(fs_stage, "UNKNOWN"),
+            "pitch_kp": pkp, "pitchKp": pkp,
+            "pitch_ki": pki, "pitchKi": pki,
+            "pitch_kd": pkd, "pitchKd": pkd,
+            "roll_kp": rkp, "rollKp": rkp,
+            "roll_ki": rki, "rollKi": rki,
+            "roll_kd": rkd, "rollKd": rkd,
+            "packet_size": 74
+        }
+
+    if len(packet_bytes) == 73:
+        unpacked = STRUCT_73B.unpack(packet_bytes)
+        pkt_seq = unpacked[1]
+        timestamp_ms = unpacked[2]
+        pitch = round(unpacked[3] / 10.0, 1)
+        roll = round(unpacked[4] / 10.0, 1)
+        ax, ay, az = unpacked[5], unpacked[6], unpacked[7]
+        gx, gy, gz = unpacked[8], unpacked[9], unpacked[10]
+        rc1, rc2, rc3, rc5 = unpacked[11], unpacked[12], unpacked[13], unpacked[14]
+        srv_br, srv_bl, srv_fr, srv_fl, esc_throt = (
+            unpacked[15], unpacked[16], unpacked[17], unpacked[18], unpacked[19]
+        )
+        bat_v = round(unpacked[20] / 100.0, 2)
+        alt = round(unpacked[21] / 10.0, 1)
+        lat_e7 = unpacked[22]
+        lon_e7 = unpacked[23]
+        lat = round(lat_e7 / 1e7, 7)
+        lon = round(lon_e7 / 1e7, 7)
+        gps_alt = round(unpacked[24] / 10.0, 1)
+        sats = unpacked[25]
+        fix_type = unpacked[26]
+        flags = unpacked[27]
+        f_mode = unpacked[28]
+        pkp = round(unpacked[29] / 100.0, 2)
+        pki = round(unpacked[30] / 100.0, 2)
+        pkd = round(unpacked[31] / 1000.0, 3)
+        rkp = round(unpacked[32] / 100.0, 2)
+        rki = round(unpacked[33] / 100.0, 2)
+        rkd = round(unpacked[34] / 1000.0, 3)
+
+        sig_lost = bool(flags & 0x01)
+        flaperon_act = bool(flags & 0x02)
+        low_v = bool(flags & 0x04)
+        esc_act = bool(flags & 0x08)
+        rc_rec = bool(flags & 0x10) if (flags & 0x10) else (not sig_lost and (flags & 0x01 == 0))
+
+        return {
+            "pkt_seq": pkt_seq,
+            "timestamp_ms": timestamp_ms,
+            "pitch": pitch,
+            "roll": roll,
+            "accel_x": ax,
+            "accel_y": ay,
+            "accel_z": az,
+            "gyro_x": gx,
+            "gyro_y": gy,
+            "gyro_z": gz,
+            "rc": [rc1, rc2, rc3, rc5],
+            "rc1": rc1,
+            "rc2": rc2,
+            "rc3": rc3,
+            "rc5": rc5,
+            "servo_br": srv_br,
+            "servo_bl": srv_bl,
+            "servo_fr": srv_fr,
+            "servo_fl": srv_fl,
+            "esc_throttle": esc_throt,
+            "servos": [srv_br, srv_bl, srv_fr, srv_fl, esc_throt],
+            "batteryVoltage": bat_v,
+            "battery_v": bat_v,
+            "alt": alt,
+            "lat": lat,
+            "latitude": lat,
+            "lat_e7": lat_e7,
+            "lon": lon,
+            "longitude": lon,
+            "lon_e7": lon_e7,
+            "gps_alt": gps_alt,
+            "satellites": sats,
+            "sats": sats,
+            "fix_type": fix_type,
+            "fixType": fix_type,
+            "gps_fixed": (fix_type > 0),
+            "rcSignalLost": sig_lost,
+            "rc_signal_lost": sig_lost,
+            "rc_data_received": rc_rec,
+            "rc_received": rc_rec,
+            "rc_connected": rc_rec,
+            "rcDataReceived": rc_rec,
+            "rcConnected": rc_rec,
+            "isAssistMode": flaperon_act,
+            "is_assist_mode": flaperon_act,
+            "rollActive": flaperon_act,
+            "roll_active": flaperon_act,
+            "flaperonActive": flaperon_act,
+            "flaperon_active": flaperon_act,
+            "flapsActive": flaperon_act,
+            "flaps_active": flaperon_act,
+            "isLowVolt": low_v,
+            "is_low_volt": low_v,
+            "isEscActive": esc_act,
+            "is_esc_active": esc_act,
+            "flightMode": f_mode,
+            "flight_mode": f_mode,
+            "failsafeStage": 0,
+            "failsafe_stage": 0,
+            "failsafe_stage_name": "INACTIVE",
+            "pitch_kp": pkp, "pitchKp": pkp,
+            "pitch_ki": pki, "pitchKi": pki,
+            "pitch_kd": pkd, "pitchKd": pkd,
+            "roll_kp": rkp, "rollKp": rkp,
+            "roll_ki": rki, "rollKi": rki,
+            "roll_kd": rkd, "rollKd": rkd,
+            "packet_size": 73
+        }
 
     if len(packet_bytes) == 61:
         # Check if legacy GPS packet (valid GPS fix/sats with non-zero lat/lon coordinates and zero reserved byte)
@@ -458,6 +801,7 @@ def decode_telemetry(packet_bytes: bytes) -> dict | None:
         assist_m = bool(flags & 0x02)
         low_v = bool(flags & 0x04)
         esc_active = bool(flags & 0x08)
+        rc_rec = bool(flags & 0x10) if (flags & 0x10) else (not sig_lost and (flags & 0x01 == 0))
 
         return {
             "pkt_seq": pkt_seq,
@@ -498,6 +842,11 @@ def decode_telemetry(packet_bytes: bytes) -> dict | None:
             "gps_fixed": False,
             "rcSignalLost": sig_lost,
             "rc_signal_lost": sig_lost,
+            "rc_data_received": rc_rec,
+            "rc_received": rc_rec,
+            "rc_connected": rc_rec,
+            "rcDataReceived": rc_rec,
+            "rcConnected": rc_rec,
             "isAssistMode": assist_m,
             "is_assist_mode": assist_m,
             "rollActive": assist_m,
@@ -542,6 +891,7 @@ def decode_telemetry(packet_bytes: bytes) -> dict | None:
         assist_m = bool(flags & 0x02)
         low_v = bool(flags & 0x04)
         esc_active = bool(flags & 0x08)
+        rc_rec = bool(flags & 0x10) if (flags & 0x10) else (not sig_lost and (flags & 0x01 == 0))
         f_mode = reserved if reserved in (1, 2, 3) else decode_ch5_mode(rc5)[0]
 
         return {
@@ -583,6 +933,11 @@ def decode_telemetry(packet_bytes: bytes) -> dict | None:
             "gps_fixed": False,
             "rcSignalLost": sig_lost,
             "rc_signal_lost": sig_lost,
+            "rc_data_received": rc_rec,
+            "rc_received": rc_rec,
+            "rc_connected": rc_rec,
+            "rcDataReceived": rc_rec,
+            "rcConnected": rc_rec,
             "isAssistMode": assist_m,
             "is_assist_mode": assist_m,
             "rollActive": assist_m,

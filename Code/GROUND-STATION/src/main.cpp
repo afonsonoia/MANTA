@@ -8,7 +8,7 @@
 // Ring buffer / packet storage for ISR to loop handoff
 static volatile bool packetReady = false;
 static volatile int packetLen = 0;
-static uint8_t packetBuf[128];
+static volatile uint8_t packetBuf[128];
 static volatile int packetRssi = 0;
 static volatile float packetSnr = 0.0f;
 
@@ -135,7 +135,7 @@ void setup() {
     // delay(100);
     // stopBuzzerTone();
 
-    Serial.println("[LORA GS] LoRa Radio ready (433MHz, SF7, BW250k, CR4/5, SYNC 0x12)!");
+    Serial.println("[LORA GS] LoRa Radio ready (433MHz, SF8, BW250k, CR4/6, SYNC 0x12)!");
     Serial.println("[LORA GS] Continuous Simplex RX active (Interrupt-driven) - listening...\n");
     lastPacketTime = millis();
 }
@@ -150,7 +150,7 @@ void loop() {
         int localLen = packetLen;
         int localRssi = packetRssi;
         float localSnr = packetSnr;
-        memcpy(localBuf, packetBuf, localLen);
+        memcpy(localBuf, (const void *)packetBuf, localLen);
         packetReady = false;
 
         if (localLen >= 2 && localBuf[0] == 'M' && localBuf[1] == 'T') {
@@ -179,6 +179,26 @@ void loop() {
                         }
                     }
                 }
+            } else if (localLen == 73) {
+                uint16_t expectedCrc = calculate_telemetry_crc16(localBuf, 71);
+                uint16_t pktCrc = (uint16_t)localBuf[71] | ((uint16_t)localBuf[72] << 8);
+                if (pktCrc == expectedCrc) {
+                    uint8_t flags = localBuf[57];
+                    bool rcLost = (flags & 0x01) != 0;
+                    if (!rcLost) {
+                        uint8_t mode = localBuf[58];
+                        bool flaperonActive = (flags & 0x02) != 0;
+                        if (!hasInitialMode) {
+                            lastFlightMode = mode;
+                            lastFlaperonActive = flaperonActive;
+                            hasInitialMode = true;
+                        } else if (mode != lastFlightMode || flaperonActive != lastFlaperonActive) {
+                            triggerBuzzer(MODE_CHANGE_BEEP_MS);
+                            lastFlightMode = mode;
+                            lastFlaperonActive = flaperonActive;
+                        }
+                    }
+                }
             } else if (localLen == 49) {
                 uint16_t expectedCrc = calculate_telemetry_crc16(localBuf, 47);
                 uint16_t pktCrc = (uint16_t)localBuf[47] | ((uint16_t)localBuf[48] << 8);
@@ -189,8 +209,11 @@ void loop() {
                         uint16_t ch5 = (uint16_t)localBuf[29] | ((uint16_t)localBuf[30] << 8);
                         uint8_t mode = 1;
                         bool flaperonActive = (flags & 0x02) != 0;
-                        if (ch5 >= 1345 && ch5 < 1610) mode = 2;
-                        else if (ch5 >= 1610) mode = 3;
+                        if (ch5 < 1247) mode = 1;
+                        else if (ch5 < 1370) mode = 2;
+                        else if (ch5 < 1476) mode = 3;
+                        else if (ch5 < 1683) mode = 1;
+                        else mode = 2; // >= 1683: Mode 2 + Flaperons or Mode 2 Auto Flap-Safe
 
                         if (!hasInitialMode) {
                             lastFlightMode = mode;

@@ -8,6 +8,15 @@
 Thumbs.db
 
 # =========================
+# AI & LLM Agent Files
+# =========================
+.agents/
+.gemini/
+.claude/
+.cursor/
+*.agent.md
+
+# =========================
 # Python
 # =========================
 # Byte-compiled / optimized / DLL files

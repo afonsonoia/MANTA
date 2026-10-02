@@ -1,13 +1,13 @@
 #!/bin/bash
 # ==============================================================================
-# MANTA UAV — Transmissão de Vídeo em Direto (Live FPV Stream)
+# MANTA UAV — Live FPV Video Stream
 # ==============================================================================
 
 WIDTH="${1:-1280}"
 HEIGHT="${2:-720}"
 FPS="${3:-30}"
 
-echo "[*] A iniciar transmissão rpicam-vid: ${WIDTH}x${HEIGHT} @ ${FPS}fps..." >&2
+echo "[*] Starting rpicam-vid stream: ${WIDTH}x${HEIGHT} @ ${FPS}fps..." >&2
 
 exec rpicam-vid \
     -t 0 \

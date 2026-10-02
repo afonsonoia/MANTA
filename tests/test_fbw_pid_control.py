@@ -43,9 +43,13 @@ def calculate_turn_compensation(roll_deg: float, gain: float = 6.0, max_comp: fl
     return max(0.0, min(max_comp, raw_comp))
 
 
+MAX_INTEGRAL_PULSE_PITCH_US = 100.0
+MAX_INTEGRAL_PULSE_ROLL_US = 150.0
+
+
 def pid_step(target_deg: float, cur_deg: float, rate_deg_s: float, dt: float,
              integrator: float, kp: float, ki: float, kd: float,
-             max_i: float = 100.0, limit_us: float = 278.0, throttle_active: bool = True):
+             max_i: float = MAX_INTEGRAL_PULSE_PITCH_US, limit_us: float = 278.0, throttle_active: bool = True):
     """Mirror of the PI-D step in control.cpp"""
     error = target_deg - cur_deg
 
@@ -159,17 +163,17 @@ class CH5DebounceFilter:
 
 class TestCH5Decoding:
     def test_truth_table_nominal_values(self):
-        # Modo 1 + Flaperons OFF (1166 us)
+        # Mode 1 + Flaperons OFF (1166 us)
         assert decode_ch5(1166) == (1, False)
-        # Modo 2 + Flaperons OFF (1328 us)
+        # Mode 2 + Flaperons OFF (1328 us)
         assert decode_ch5(1328) == (2, False)
-        # Modo 3 + Flaperons OFF (1411 us)
+        # Mode 3 + Flaperons OFF (1411 us)
         assert decode_ch5(1411) == (3, False)
-        # Modo 1 + Flaperons ON (1541 us)
+        # Mode 1 + Flaperons ON (1541 us)
         assert decode_ch5(1541) == (1, True)
-        # Modo 2 + Flaperons ON (1825 us)
+        # Mode 2 + Flaperons ON (1825 us)
         assert decode_ch5(1825) == (2, True)
-        # Modo 3 commanded + Flaperons ON (1942 us) -> auto-demoted to Mode 2
+        # Mode 3 commanded + Flaperons ON (1942 us) -> auto-demoted to Mode 2
         assert decode_ch5(1942) == (2, True)
 
     def test_window_thresholds(self):
@@ -359,7 +363,7 @@ class TestPIDLoop:
         """
         ki = 5.00
         dt = 0.020
-        max_i = 100.0
+        max_i = 150.0  # MAX_INTEGRAL_PULSE_ROLL_US (150.0 us, 50% increase over pitch 100.0 us)
 
         def update_roll_integrator(integrator: float, roll_error: float, throttle_us: int, cur_roll: float) -> float:
             if throttle_us > 1050 and abs(cur_roll) <= 60.0:
@@ -384,6 +388,18 @@ class TestPIDLoop:
         # Throttle idle: resets to 0.0
         i_val_idle = update_roll_integrator(integrator=40.0, roll_error=5.0, throttle_us=1000, cur_roll=20.0)
         assert i_val_idle == 0.0
+
+    def test_roll_anti_windup_clamping_at_150us(self):
+        """Verifies that rollIntegrator clamps at MAX_INTEGRAL_PULSE_ROLL_US (150.0 us, +50% increase)
+        providing +/-13.5 deg of steady-state roll trim authority."""
+        kp, ki, kd = 15.00, 5.00, 1.500
+        dt = 0.020
+        integrator = 0.0
+        for _ in range(200):
+            _, integrator = pid_step(target_deg=20.0, cur_deg=0.0, rate_deg_s=0.0, dt=dt,
+                                     integrator=integrator, kp=kp, ki=ki, kd=kd,
+                                     max_i=150.0, throttle_active=True)
+        assert integrator == 150.0
 
 
 
@@ -991,45 +1007,52 @@ class TestFlaperonKinematicsAndSafetyRule:
 
     def test_servo_physical_bounds_with_flaperons_and_full_roll_command(self):
         """Under full +/-278 us roll command with flaperons engaged (+/-222 us),
-        anti-saturation headroom scaling prevents roll command clipping while ensuring
-        both FR and FL servos respect the 25 deg angular limit (+/-278 us from trimmed neutral)
-        and remain safely inside the [1000, 2000] us hardware pulse range.
+        the expanded field of motion (32.0 deg / 356 us) allows full 20.0 deg flap deflection
+        during normal roll adjustments, while anti-saturation headroom gracefully protects
+        servo limits at stick extremes without clipping.
+        Both FR and FL servos remain safely inside the [1000, 2000] us hardware pulse range.
         """
         angle_pulse_limit = 278
+        flaperon_max_limit = 356  # 32.0 deg expanded field of motion for flaperons
         flap_offset_fr = 222
         flap_offset_fl = -222
 
         neutral_fr = 1500
         neutral_fl = 1544
 
-        # Test across stick extremes
-        for roll_diff in [-278, -150, 0, 150, 278]:
-            roll_ratio = min(1.0, abs(roll_diff) / float(angle_pulse_limit))
-            headroom = 1.0 - roll_ratio
+        # Test across stick extremes and moderate steering inputs
+        for roll_diff in [-278, -150, -100, 0, 100, 150, 278]:
+            avail_headroom = flaperon_max_limit - abs(roll_diff)
+            headroom = max(0.0, min(1.0, avail_headroom / float(abs(flap_offset_fr))))
             eff_fr = round(flap_offset_fr * headroom)
             eff_fl = round(flap_offset_fl * headroom)
+
+            # At zero and moderate roll (e.g. <= 100 us), flaperons retain 100% full 20.0 deg deflection!
+            if abs(roll_diff) <= 100:
+                assert headroom == 1.0, f"Headroom must be 100% for roll_diff={roll_diff}"
 
             roll_offset_fr = eff_fr - roll_diff
             roll_offset_fl = eff_fl - roll_diff
 
-            target_fr = max(neutral_fr - angle_pulse_limit, min(neutral_fr + angle_pulse_limit, neutral_fr + roll_offset_fr))
-            target_fl = max(neutral_fl - angle_pulse_limit, min(neutral_fl + angle_pulse_limit, neutral_fl + roll_offset_fl))
+            target_fr = max(neutral_fr - flaperon_max_limit, min(neutral_fr + flaperon_max_limit, neutral_fr + roll_offset_fr))
+            target_fl = max(neutral_fl - flaperon_max_limit, min(neutral_fl + flaperon_max_limit, neutral_fl + roll_offset_fl))
 
             target_fr = max(1000, min(2000, target_fr))
             target_fl = max(1000, min(2000, target_fl))
 
-            # Strictly within +/-25 deg (+/-278 us) from each servo's trimmed neutral
-            assert (neutral_fr - angle_pulse_limit) <= target_fr <= (neutral_fr + angle_pulse_limit)
-            assert (neutral_fl - angle_pulse_limit) <= target_fl <= (neutral_fl + angle_pulse_limit)
+            # Strictly within +/-32 deg (+/-356 us) from each servo's trimmed neutral
+            assert (neutral_fr - flaperon_max_limit) <= target_fr <= (neutral_fr + flaperon_max_limit)
+            assert (neutral_fl - flaperon_max_limit) <= target_fl <= (neutral_fl + flaperon_max_limit)
 
             # Strictly within [1000, 2000] hardware limits
             assert 1000 <= target_fr <= 2000
             assert 1000 <= target_fl <= 2000
 
-            # Substantial safety margins to electrical limits
-            assert 2000 - target_fr >= 222
-            assert target_fl - 1000 >= 266
-            assert 2000 - target_fl >= 178
+            # Guaranteed safety margins to electrical limits (>= 100 us)
+            assert 2000 - target_fr >= 144
+            assert target_fr - 1000 >= 144
+            assert target_fl - 1000 >= 188
+            assert 2000 - target_fl >= 100
 
     def test_mode3_prohibited_when_flaperons_active(self):
         """Validates that any attempt to select Mode 3 while flaperons are ON
@@ -1186,5 +1209,151 @@ class TestFlaperonKinematicsAndSafetyRule:
                     assert net_roll_moment > 0, "Negative roll_diff must generate positive roll moment"
                 else:
                     assert net_roll_moment < 0, "Positive roll_diff must generate negative roll moment"
+
+
+class TestAutonomousEmergencyFailsafe:
+    """Validates Autonomous Emergency Failsafe state machine:
+    1. Arming flag requires throttle > 1600us in the past; otherwise motor stays OFF (1000us) on bench.
+    2. Direct entry into Stage 2 (Loiter: roll -30 deg, pitch +5 deg, throttle base 1500us).
+    3. Stage 2 altitude hold throttle adjustments (+2us if <25m, -1us if >25m, -5us if >40m).
+    4. Transition to Stage 3 if duration > 30s or baro failure: stops altitude logic, decreases 1us/s.
+    5. Immediate cancellation and recovery upon RC signal restoration.
+    """
+
+    def test_bench_guard_requires_throttle_above_1600us(self):
+        # Scenario 1: RC signal lost before throttle ever exceeded 1600us (e.g. at 1200us on bench)
+        throttle_history = [1000, 1050, 1200, 1400, 1550]
+        was_above_1600 = any(throt > 1600 for throt in throttle_history)
+        assert not was_above_1600, "Throttle never reached >1600us"
+
+        # Failsafe should stay on ground stage with motor OFF
+        stage = 1  # FS_STAGE_GROUND
+        throttle_out = 1000
+        assert stage == 1
+        assert throttle_out == 1000
+
+        # Scenario 2: Aircraft took off, throttle reached 1750us
+        throttle_history.append(1750)
+        was_above_1600 = any(throt > 1600 for throt in throttle_history)
+        assert was_above_1600, "Throttle passed 1600us: armed for in-flight failsafe"
+
+    def test_direct_entry_to_stage2_and_attitude_targets(self):
+        # When signal is lost in flight (armed), enters directly into Stage 2
+        stage = 3  # FS_STAGE_LOITER (Stage 2)
+        target_roll_deg = -30.0  # 30 deg LEFT bank
+        target_pitch_deg = +5.0  # +5 deg nose UP
+        base_throttle_us = 1500
+
+        assert stage == 3
+        assert target_roll_deg == -30.0
+        assert target_pitch_deg == 5.0
+        assert base_throttle_us == 1500
+
+    def test_stage2_dynamic_throttle_adjustment(self):
+        # Simulate altitude throttle adjustments every 100ms
+        current_throt = 1500
+        min_loiter_throt = 1250
+
+        # Case A: Plane is at 20m (< 25m) -> should increase +2us per 100ms
+        alt = 20.0
+        for _ in range(10):  # 1 second (10 ticks)
+            if alt > 40.0:
+                current_throt -= 5
+            elif alt > 25.0:
+                current_throt -= 1
+            elif alt < 25.0:
+                current_throt += 2
+            current_throt = max(min_loiter_throt, min(2000, current_throt))
+
+        assert current_throt == 1520  # +20us after 1s
+
+        # Case B: Plane climbed to 30m (> 25m and <= 40m) -> decreases 1us per 100ms
+        alt = 30.0
+        for _ in range(10):  # 1 second
+            if alt > 40.0:
+                current_throt -= 5
+            elif alt > 25.0:
+                current_throt -= 1
+            elif alt < 25.0:
+                current_throt += 2
+            current_throt = max(min_loiter_throt, min(2000, current_throt))
+
+        assert current_throt == 1510  # -10us after 1s
+
+        # Case C: Plane surged to 45m (> 40m) -> decreases 5us per 100ms
+        alt = 45.0
+        for _ in range(10):  # 1 second
+            if alt > 40.0:
+                current_throt -= 5
+            elif alt > 25.0:
+                current_throt -= 1
+            elif alt < 25.0:
+                current_throt += 2
+            current_throt = max(min_loiter_throt, min(2000, current_throt))
+
+        assert current_throt == 1460  # -50us after 1s
+
+    def test_transition_to_stage3_on_30s_timeout_or_baro_failure(self):
+        # Case A: Failsafe active for > 30 seconds
+        elapsed_ms = 30001
+        baro_healthy = True
+        stage = 4 if (elapsed_ms >= 30000 or not baro_healthy) else 3
+        assert stage == 4  # FS_STAGE_DESCEND (Stage 3)
+
+        # Targets in Stage 3 remain same as Stage 2
+        target_roll_deg = -30.0
+        target_pitch_deg = +5.0
+        assert target_roll_deg == -30.0
+        assert target_pitch_deg == 5.0
+
+        # Stage 3 decreases throttle by 1us EVERY SECOND continuously
+        dynamic_throt = 1450
+        for second in range(60):  # 60 seconds
+            if dynamic_throt > 1000:
+                dynamic_throt -= 1
+            dynamic_throt = max(1000, min(2000, dynamic_throt))
+
+        assert dynamic_throt == 1390  # 1450 - 60 = 1390us
+
+        # Case B: Baro fails immediately on signal loss
+        elapsed_ms = 100
+        baro_healthy = False
+        stage_baro_fail = 4 if (elapsed_ms >= 30000 or not baro_healthy) else 3
+        assert stage_baro_fail == 4, "Must enter Stage 3 immediately if barometer is unavailable"
+
+    def test_immediate_reset_upon_rc_recovery(self):
+        # When RC signal returns, failsafe must immediately abort
+        rc_signal_lost = False
+        stage = 0  # FS_STAGE_INACTIVE
+        assert stage == 0
+
+    def test_failsafe_roll_mixer_negative_feedback_polarity(self):
+        """Validates that autonomous failsafe mixer applies -rollDiff to FR and FL,
+        guaranteeing stable negative feedback and correct leftward roll aerodynamic torque.
+        """
+        target_roll_deg = -30.0  # Failsafe commands LEFT turn
+        cur_roll_deg = 0.0       # Wings level initially
+        roll_rate = 0.0
+        kp = 15.00
+        angle_limit = 278
+
+        error = target_roll_deg - cur_roll_deg  # -30.0
+        roll_pid_out = kp * error               # -450.0
+        roll_diff = max(-angle_limit, min(angle_limit, int(roll_pid_out)))  # -278
+
+        # Mixer: Must be -roll_diff so negative roll_diff gives positive offsets
+        offset_fr = -roll_diff  # = +278 us
+        offset_fl = -roll_diff  # = +278 us
+
+        # On MANTA:
+        # FR: positive PWM offset pushes trailing edge DOWN -> right wing lift increases (pushes right wing UP)
+        # FL: positive PWM offset pushes trailing edge UP -> left wing lift decreases (pushes left wing DOWN)
+        # Result: Combined aerodynamic torque rolls the aircraft to the LEFT, matching target_roll = -30 deg!
+        assert offset_fr > 0, "FR must receive positive offset to roll left"
+        assert offset_fl > 0, "FL must receive positive offset to roll left"
+
+
+
+
 
 

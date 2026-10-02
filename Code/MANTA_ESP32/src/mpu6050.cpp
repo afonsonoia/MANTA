@@ -24,6 +24,7 @@ static float q0 = 1.0f, q1 = 0.0f, q2 = 0.0f, q3 = 0.0f;
 // Integral error accumulator for online gyro bias compensation
 static float eIntX = 0.0f, eIntY = 0.0f, eIntZ = 0.0f;
 
+static portMUX_TYPE mpuMux = portMUX_INITIALIZER_UNLOCKED;
 static volatile float currentPitch = 0.0f;
 static volatile float currentRoll = 0.0f;
 static volatile float currentYaw = 0.0f;
@@ -321,27 +322,37 @@ void sampleMPU6050Uniformly() {
   // orientation:
   float sinp = 2.0f * (q0 * q1 + q2 * q3);
   sinp = constrain(sinp, -1.0f, 1.0f);
-  currentPitch = (asinf(sinp) * (180.0f / M_PI)) -
-                 IMU_PITCH_MOUNTING_OFFSET_DEG;
-  currentRoll = (-1.0f *
-                 atan2f(2.0f * (q0 * q2 - q1 * q3),
-                        q0 * q0 - q1 * q1 - q2 * q2 + q3 * q3) *
-                 (180.0f / M_PI)) -
-                IMU_ROLL_MOUNTING_OFFSET_DEG;
-  currentYaw = atan2f(2.0f * (q0 * q3 + q1 * q2),
-                      q0 * q0 + q1 * q1 - q2 * q2 - q3 * q3) *
-               (180.0f / M_PI);
+  float pitchCalc = (asinf(sinp) * (180.0f / M_PI)) -
+                    IMU_PITCH_MOUNTING_OFFSET_DEG;
+  float rollCalc = (-1.0f *
+                    atan2f(2.0f * (q0 * q2 - q1 * q3),
+                           q0 * q0 - q1 * q1 - q2 * q2 + q3 * q3) *
+                    (180.0f / M_PI)) -
+                   IMU_ROLL_MOUNTING_OFFSET_DEG;
+  float yawCalc = atan2f(2.0f * (q0 * q3 + q1 * q2),
+                         q0 * q0 + q1 * q1 - q2 * q2 - q3 * q3) *
+                  (180.0f / M_PI);
+
+  portENTER_CRITICAL(&mpuMux);
+  currentPitch = pitchCalc;
+  currentRoll = rollCalc;
+  currentYaw = yawCalc;
+  portEXIT_CRITICAL(&mpuMux);
 }
 
 void getFilteredMPUData(float &pitch, float &roll) {
+  portENTER_CRITICAL(&mpuMux);
   pitch = currentPitch;
   roll = currentRoll;
+  portEXIT_CRITICAL(&mpuMux);
 }
 
 void getFilteredMPUData(float &pitch, float &roll, float &yaw) {
+  portENTER_CRITICAL(&mpuMux);
   pitch = currentPitch;
   roll = currentRoll;
   yaw = currentYaw;
+  portEXIT_CRITICAL(&mpuMux);
 }
 
 bool isMPU6050Available() { return mpuInitialized; }

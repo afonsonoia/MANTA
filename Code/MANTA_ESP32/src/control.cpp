@@ -1,6 +1,8 @@
 #include "control.h"
 #include "battery.h"
+#include "bmp280.h"
 #include "config.h"
+#include "gps.h"
 #include "mpu6050.h"
 #include "network.h"
 #include "receiver.h"
@@ -12,6 +14,8 @@ static Servo servoFR;  // Front Right (PIN_SERVO_FR / GPIO27)
 static Servo servoFL;  // Front Left (PIN_SERVO_FL / GPIO26)
 static Servo escMotor; // Throttle / ESC (PIN_ESC / GPIO25)
 
+static portMUX_TYPE actuatorMux = portMUX_INITIALIZER_UNLOCKED;
+
 static volatile int lastWritePulseUs[5] = {
     1500, 1500, 1500, 1500,
     1000}; // Initialized properly in initControlSystem()
@@ -19,10 +23,16 @@ static constexpr uint16_t SERVO_UPDATE_INTERVAL_MS =
     20; // 50 Hz fast servo update
 
 static void updateOutputChannel(uint8_t index, Servo &srv, int targetPulseUs) {
-  targetPulseUs = constrain(targetPulseUs, 1000, 2000);
+  if (index == 4) {
+    targetPulseUs = constrain(targetPulseUs, THROTTLE_MIN_PULSE, THROTTLE_MAX_PULSE);
+  } else {
+    targetPulseUs = constrain(targetPulseUs, 1000, 2000);
+  }
   if (targetPulseUs != lastWritePulseUs[index]) {
     srv.writeMicroseconds(targetPulseUs);
+    portENTER_CRITICAL(&actuatorMux);
     lastWritePulseUs[index] = targetPulseUs;
+    portEXIT_CRITICAL(&actuatorMux);
   }
 }
 
@@ -53,24 +63,20 @@ static constexpr uint16_t centerCH2 = 1500;
 static constexpr uint8_t servoMaxAngleDeg =
     DEFAULT_SERVO_MAX_ANGLE_DEG; // Default 25 deg
 
-// ── CALIBRAÇÃO ESTÁTICA DE SUPERFÍCIES DE CONTROLO (TRIM OFFSETS) ───────────
-// Fator de conversão: ~11.11us por grau (1000us / 90 deg)
-// Elevadores (BR e BL) com trim de +2.0 deg UP (Cabrar) no neutro para compensar tendência de descer o nariz
-constexpr float TRIM_DEG_BR =
-    -2.0f; // -2.0 deg (Subtrai 22us -> Neutro: 1478 us, elevador BR para cima)
-constexpr float TRIM_DEG_BL =
-    -12.0f; // -12.0 deg (Soma 133us -> Neutro: 1633 us, elevador BL para cima invertido)
-constexpr float TRIM_DEG_FR = 0.0f;
-constexpr float TRIM_DEG_FL =
-    4.0f; // +4.0 deg UP (Trim mecânico de encaixe do servo na superfície de controlo: define neutro físico plano em 1544 us)
+// ── STATIC CONTROL SURFACE CALIBRATION (TRIM OFFSETS) ───────────────────────
+// Elevators (BR & BL) trimmed +2.0 deg UP at neutral to counter nose-down tendency
+constexpr float TRIM_DEG_BR = -2.0f; // -2.0 deg (-22 us -> Neutral: 1478 us, BR elevator up)
+constexpr float TRIM_DEG_BL = -12.0f; // -12.0 deg (+133 us -> Neutral: 1633 us, BL elevator inverted up)
+constexpr float TRIM_DEG_FR = 0.0f;   // 0.0 deg (0 us -> Neutral: 1500 us)
+constexpr float TRIM_DEG_FL = 4.0f;   // +4.0 deg UP (+44 us -> Mechanical spline fit neutral: 1544 us)
 
 constexpr int TRIM_US_BR =
-    (int)(TRIM_DEG_BR * US_PER_DEGREE + (TRIM_DEG_BR >= 0 ? 0.5f : -0.5f)); // -22 us -> Neutro: 1478 us
+    (int)(TRIM_DEG_BR * US_PER_DEGREE + (TRIM_DEG_BR >= 0 ? 0.5f : -0.5f));
 constexpr int TRIM_US_BL =
-    -(int)(TRIM_DEG_BL * US_PER_DEGREE + (TRIM_DEG_BL >= 0 ? 0.5f : -0.5f)); // +133 us -> Neutro: 1633 us
-constexpr int TRIM_US_FR = (int)(TRIM_DEG_FR * US_PER_DEGREE); // 0 us -> Neutro: 1500 us
+    -(int)(TRIM_DEG_BL * US_PER_DEGREE + (TRIM_DEG_BL >= 0 ? 0.5f : -0.5f));
+constexpr int TRIM_US_FR = (int)(TRIM_DEG_FR * US_PER_DEGREE);
 constexpr int TRIM_US_FL =
-    +(int)(TRIM_DEG_FL * US_PER_DEGREE + (TRIM_DEG_FL >= 0 ? 0.5f : -0.5f)); // +44 us -> Neutro mecânico: 1544 us
+    +(int)(TRIM_DEG_FL * US_PER_DEGREE + (TRIM_DEG_FL >= 0 ? 0.5f : -0.5f));
 
 static volatile FlightMode currentFlightMode = FLIGHT_MODE_1;
 static volatile bool currentFlaperonActive = false;
@@ -138,6 +144,22 @@ void getFBWTargets(float &targetPitch, float &targetRoll) {
   targetRoll = currentTargetRoll;
 }
 
+// Autonomous Emergency Failsafe State Variables (Signal Loss Recovery)
+static volatile FailsafeStage activeFailsafeStage = FS_STAGE_INACTIVE;
+static bool wasThrottleAbove1600Ever = false;
+static unsigned long throttleZeroStartTimeMs = 0;
+static unsigned long failsafeStartTimeMs = 0;
+static unsigned long lastThrottleAltAdjustTimeMs = 0;
+static unsigned long lastStage3StepTimeMs = 0;
+static int failsafeDynamicThrottleUs = FAILSAFE_LOITER_THROTTLE_BASE_US;
+static float currentSlewTargetPitch = 0.0f;
+static float currentSlewTargetRoll = 0.0f;
+static int currentSlewThrottle = 1000;
+
+FailsafeStage getActiveFailsafeStage() {
+  return activeFailsafeStage;
+}
+
 // Active in-flight PID gains
 static volatile float currentActivePitchKp = PID_PITCH_KP;
 static volatile float currentActivePitchKi = PID_PITCH_KI;
@@ -164,13 +186,13 @@ static inline float applyExpoAndScaleDeg(int rawStickUs, int centerUs, float max
 }
 
 void decodeCH5(uint16_t ch5Pulse, FlightMode &mode, bool &flaperonActive) {
-  // SWC (3-pos switch) + SWB (2-pos switch) calibrado do transmissor:
-  // SWC 1 + SWB OFF: ~1166 us -> Modo 1 + Flaperons OFF (Pitch Manual + Roll Assist)
-  // SWC 2 + SWB OFF: ~1328 us -> Modo 2 + Flaperons OFF (FBW Fixo Pitch & Roll)
-  // SWC 3 + SWB OFF: ~1411 us -> Modo 3 + Flaperons OFF (FBW Adaptativo ESC Pitch & Roll)
-  // SWC 1 + SWB ON:  ~1541 us -> Modo 1 + Flaperons ON  (Pitch Manual + Roll Assist + Flaps 15 deg DOWN)
-  // SWC 2 + SWB ON:  ~1825 us -> Modo 2 + Flaperons ON  (FBW Fixo Pitch & Roll + Flaps 15 deg DOWN)
-  // SWC 3 + SWB ON:  ~1942 us -> Modo 2 Auto Flap-Safe + Flaperons ON (Safety: Modo 3 demoted to 2)
+  // SWC (3-position switch) + SWB (2-position switch) transmitter calibration:
+  // SWC 1 + SWB OFF: ~1166 us -> Mode 1 + Flaperons OFF (Pitch Manual + Roll Assist)
+  // SWC 2 + SWB OFF: ~1328 us -> Mode 2 + Flaperons OFF (Fixed FBW Pitch & Roll)
+  // SWC 3 + SWB OFF: ~1411 us -> Mode 3 + Flaperons OFF (Adaptive FBW Pitch & Roll)
+  // SWC 1 + SWB ON:  ~1541 us -> Mode 1 + Flaperons ON  (Pitch Manual + Roll Assist + Flaps 20 deg DOWN)
+  // SWC 2 + SWB ON:  ~1825 us -> Mode 2 + Flaperons ON  (Fixed FBW Pitch & Roll + Flaps 20 deg DOWN)
+  // SWC 3 + SWB ON:  ~1942 us -> Mode 2 Auto Flap-Safe + Flaperons ON (Safety: Mode 3 demoted to 2)
   if (ch5Pulse < 1247) {
     mode = FLIGHT_MODE_1;
     flaperonActive = false;
@@ -195,17 +217,13 @@ void decodeCH5(uint16_t ch5Pulse, FlightMode &mode, bool &flaperonActive) {
 }
 
 void decodeCH5WithHysteresis(uint16_t ch5Pulse, FlightMode currentMode, bool currentFlaperon, FlightMode &outMode, bool &outFlaperon) {
-  // Rejeita pulsos fora do range válido de RC (ruído de EMI extremo ou canal desconectado)
   if (ch5Pulse < 850 || ch5Pulse > 2150) {
     outMode = currentMode;
     outFlaperon = currentFlaperon;
     return;
   }
 
-  // Mapeia estado atual: 0 a 5
-  // 0: Modo 1 OFF (~1166 us), 1: Modo 2 OFF (~1328 us)
-  // 2: Modo 3 OFF (~1411 us), 3: Modo 1 ON (~1541 us)
-  // 4: Modo 2 ON (~1825 us),  5: Modo 3 ON (~1942 us)
+  // Map current state: 0 to 5
   uint8_t curState = 0;
   if (currentMode == FLIGHT_MODE_1) {
     curState = currentFlaperon ? 3 : 0;
@@ -218,12 +236,6 @@ void decodeCH5WithHysteresis(uint16_t ch5Pulse, FlightMode currentMode, bool cur
   uint8_t nextState = curState;
 
   // Direct midpoint decoding with symmetric hysteresis (+/- 3us to +/- 5us):
-  // State 0 (Mode 1 OFF): nominal 1166 us (< 1247)
-  // State 1 (Mode 2 OFF): nominal 1328 us (1247 - 1370)
-  // State 2 (Mode 3 OFF): nominal 1411 us (1370 - 1476)
-  // State 3 (Mode 1 ON):  nominal 1541 us (1476 - 1683)
-  // State 4 (Mode 2 ON):  nominal 1825 us (1683 - 1884)
-  // State 5 (Mode 3 ON):  nominal 1942 us (>= 1884)
   if (ch5Pulse < (curState == 0 ? CH5_THRES_M1_OFF_TO_M2_OFF : CH5_THRES_M2_OFF_TO_M1_OFF)) {
     nextState = 0;
   } else if (ch5Pulse < (curState <= 1 ? CH5_THRES_M2_OFF_TO_M3_OFF : CH5_THRES_M3_OFF_TO_M2_OFF)) {
@@ -261,7 +273,7 @@ void decodeCH5WithHysteresis(uint16_t ch5Pulse, FlightMode currentMode, bool cur
       break;
     case 5:
     default:
-      // USER RULE: Se flaperons estiver ligado, Modo 3 não pode estar ativo -> Auto-demote to Mode 2!
+      // Safety rule: Flaperons active prohibits Mode 3 -> Auto-demote to Mode 2
       outMode = FLIGHT_MODE_2;
       outFlaperon = true;
       break;
@@ -281,15 +293,18 @@ bool isFlaperonActive() {
 }
 
 void getActuatorOutputs(int &br, int &bl, int &fr, int &fl, int &throttle, bool &flaperonActive) {
+  portENTER_CRITICAL(&actuatorMux);
   br = lastWritePulseUs[0];
   bl = lastWritePulseUs[1];
   fr = lastWritePulseUs[2];
   fl = lastWritePulseUs[3];
   throttle = lastWritePulseUs[4];
   flaperonActive = currentFlaperonActive;
+  portEXIT_CRITICAL(&actuatorMux);
 }
 
 void getActuatorOutputs(int &br, int &bl, int &fr, int &fl, int &throttle, FlightMode &flightMode, bool &flaperonActive) {
+  portENTER_CRITICAL(&actuatorMux);
   br = lastWritePulseUs[0];
   bl = lastWritePulseUs[1];
   fr = lastWritePulseUs[2];
@@ -297,6 +312,7 @@ void getActuatorOutputs(int &br, int &bl, int &fr, int &fl, int &throttle, Fligh
   throttle = lastWritePulseUs[4];
   flightMode = currentFlightMode;
   flaperonActive = currentFlaperonActive;
+  portEXIT_CRITICAL(&actuatorMux);
 }
 
 static void controlTaskLoop(void *parameter) {
@@ -332,14 +348,13 @@ static void controlTaskLoop(void *parameter) {
     uint16_t c3 = (ch3 > 0) ? ch3 : 1000;
     uint16_t c5 = (ch5 > 0) ? ch5 : 0;
 
-    // ── DECODIFICAÇÃO CH5 COM HISTERESE SCHMITT-TRIGGER & DEBOUNCE TEMPORAL ──
-    // Só avalia e atualiza o candidato de modo se o sinal RC estiver ativo e houver pulso válido no CH5.
-    // Durante failsafe / perda de sinal, a máquina de modos congela o último estado válido do comando.
+    // ── CH5 SCHMITT-TRIGGER HYSTERESIS & TEMPORAL DEBOUNCE ──────────────────
     static FlightMode pendingMode = FLIGHT_MODE_1;
     static bool pendingFlaperon = false;
     static uint8_t debounceCount = 0;
     static bool firstLoopTick = true;
     static bool lastFlaperonActive = false;
+    static bool wasInFailsafe = false;
 
     if (!rcSignalLost && c5 > 0) {
       FlightMode candidateMode = currentFlightMode;
@@ -377,8 +392,7 @@ static void controlTaskLoop(void *parameter) {
     bool flaperonActive = currentFlaperonActive;
     bool rollActive = true; // Roll control is PERMANENTLY ENABLED
 
-    // Safety Failsafe: if MPU6050 IMU is offline/unavailable, force fallback to Mode 1 (Manual)
-    // to prevent integrator windup and uncontrolled dive!
+    // Safety fallback: if MPU6050 IMU is offline, fallback to Mode 1 (Manual)
     bool mpuHealthy = isMPU6050Available();
     if (!mpuHealthy) {
       flightMode = FLIGHT_MODE_1;
@@ -388,7 +402,6 @@ static void controlTaskLoop(void *parameter) {
     }
 
     // Reset integrators and ESC on flight mode change (bumpless transfer)
-    // Preserva os ganhos aprendidos escPitchThetaHat e escRollThetaHat para partilha entre Modo 2 e Modo 3
     bool modeJustChanged = false;
     if (flightMode != lastFlightMode) {
       resetControlIntegrators();
@@ -397,16 +410,24 @@ static void controlTaskLoop(void *parameter) {
       lastFlaperonActive = flaperonActive;
       modeJustChanged = true;
     } else if (flaperonActive != lastFlaperonActive) {
-      // SWB toggled Flaperons ON/OFF within same flight mode: clear roll integrator for smooth transition
       rollIntegrator = 0.0f;
       lastFlaperonActive = flaperonActive;
     }
 
-    // Read attitude estimation from MPU6050
     float curPitch = 0.0f, curRoll = 0.0f;
     getFilteredMPUData(curPitch, curRoll);
 
-    // Initial startup check and mode switch: initialize lastPitchMeas / lastRollMeas to eliminate derivative kick
+    // Defensive validation: reject NaN / Inf from IMU
+    if (isnan(curPitch) || isnan(curRoll) || isinf(curPitch) || isinf(curRoll)) {
+      mpuHealthy = false;
+      curPitch = 0.0f;
+      curRoll = 0.0f;
+      flightMode = FLIGHT_MODE_1;
+      rollActive = false;
+      resetControlIntegrators();
+      resetExtremumSeeking(false);
+    }
+
     if (firstLoopTick || modeJustChanged) {
       lastPitchMeas = curPitch;
       lastRollMeas = curRoll;
@@ -420,6 +441,34 @@ static void controlTaskLoop(void *parameter) {
     lastRollMeas = curRoll;
 
     if (!rcSignalLost) {
+      unsigned long nowMs = millis();
+      // Arm in-flight failsafe only after throttle exceeds 1600us
+      if (c3 > FAILSAFE_ARM_THROTTLE_THRESHOLD_US) {
+        wasThrottleAbove1600Ever = true;
+      }
+
+      // Auto-disarm after landing: idle throttle for > 20s disarms in-flight failsafe
+      if (c3 < FAILSAFE_DISARM_THROTTLE_THRESHOLD_US) {
+        if (throttleZeroStartTimeMs == 0) {
+          throttleZeroStartTimeMs = nowMs;
+        } else if (nowMs - throttleZeroStartTimeMs >= FAILSAFE_LANDING_DISARM_TIMEOUT_MS) {
+          wasThrottleAbove1600Ever = false;
+        }
+      } else {
+        throttleZeroStartTimeMs = 0;
+      }
+
+      // Reset failsafe active stage
+      if (wasInFailsafe) {
+        resetControlIntegrators();
+        wasInFailsafe = false;
+      }
+      activeFailsafeStage = FS_STAGE_INACTIVE;
+      failsafeStartTimeMs = 0;
+      lastThrottleAltAdjustTimeMs = 0;
+      lastStage3StepTimeMs = 0;
+      failsafeDynamicThrottleUs = FAILSAFE_LOITER_THROTTLE_BASE_US;
+
       // Throttle (CH3)
       targetThrottle =
           mapRangeLinear((int)c3, THROTTLE_INPUT_MIN_US, THROTTLE_INPUT_MAX_US,
@@ -431,17 +480,21 @@ static void controlTaskLoop(void *parameter) {
         }
       }
 
+      currentSlewThrottle = targetThrottle;
+      currentSlewTargetPitch = currentTargetPitch;
+      currentSlewTargetRoll = currentTargetRoll;
+
       int pitchDiff = 0;
       int rollDiff = 0;
 
-      // ── MODO 1: 100% MANUAL (COM OU SEM ROLL ASSIST) ──────────────────────
+      // ── MODE 1: 100% MANUAL (WITH ROLL ASSIST) ────────────────────────────
       if (flightMode == FLIGHT_MODE_1) {
         escIsActive = false;
         float rollScale = constrain(escRollThetaHat, ESC_ROLL_MIN_SCALE, ESC_ROLL_MAX_SCALE);
         escCurrentPitchScale = 1.0f;
         escCurrentRollScale = rollScale;
 
-        // Pitch: Manual direto com expo padrão
+        // Pitch: Direct manual stick with expo
         pitchDiff = applyExpoAndScale((int)c2, (int)centerCH2, anglePulseLimit, RC_EXPO_FACTOR);
         currentTargetPitch = 0.0f;
 
@@ -453,7 +506,7 @@ static void controlTaskLoop(void *parameter) {
         currentActiveRollKd = PID_ROLL_KD * sqrtf(rollScale);
 
         if (rollActive) {
-          // Roll Assist / Envelope Protection (permanentemente ativo em voo normal)
+          // Roll Assist / Envelope Protection (permanently active in normal flight)
           float normC1 = constrain((float)((int)c1 - (int)centerCH1) * 0.002f, -1.0f, 1.0f);
           float shapedC1 = (1.0f - RC_EXPO_FACTOR) * normC1 + RC_EXPO_FACTOR * (normC1 * normC1 * normC1);
           float pilotCmdDeg = constrain(shapedC1 * 20.0f, -20.0f, 20.0f);
@@ -477,16 +530,16 @@ static void controlTaskLoop(void *parameter) {
           }
           rollDiff = (int)((effectiveRollCmdDeg / 20.0f) * (float)anglePulseLimit);
         } else {
-          // Roll Manual direto 100% (fallback de seguranca caso IMU fique offline)
+          // Direct 100% manual roll fallback if IMU is offline
           rollDiff = applyExpoAndScale((int)c1, (int)centerCH1, anglePulseLimit, RC_EXPO_FACTOR);
         }
         currentTargetRoll = 0.0f;
         resetControlIntegrators();
       }
 
-      // ── MODO 2: FLY-BY-WIRE COM GANHOS PARTILHADOS / APREENDIDOS (MODO 3 SHARING) ──
+      // ── MODE 2: FIXED FLY-BY-WIRE (WITH MODE 3 SHARED GAINS) ──────────────
       else if (flightMode == FLIGHT_MODE_2) {
-        escIsActive = false; // Modo 2 opera como FBW fixo (sem dither) com os ganhos otimizados do Modo 3
+        escIsActive = false;
 
         float pitchScale = constrain(escPitchThetaHat, ESC_PITCH_MIN_SCALE, ESC_PITCH_MAX_SCALE);
         float rollScale = constrain(escRollThetaHat, ESC_ROLL_MIN_SCALE, ESC_ROLL_MAX_SCALE);
@@ -508,12 +561,10 @@ static void controlTaskLoop(void *parameter) {
         currentActiveRollKi = activeRollKi;
         currentActiveRollKd = activeRollKd;
 
-        // 1. PITCH FBW PI-D (Controlo em Loop Fechado com Feedback Negativo Estável):
-        // Polaridade do Stick CH2: Puxar stick (c2 < 1500us) comanda Cabrar (+deg)
-        //                          Empurrar stick (c2 > 1500us) comanda Picar (-deg)
+        // Pitch FBW PI-D (Closed-loop with strictly negative feedback):
+        // Pull stick (c2 < 1500us) commands Pitch UP (+deg)
+        // Push stick (c2 > 1500us) commands Pitch DOWN (-deg)
         float pilotTargetPitchDeg = -applyExpoAndScaleDeg((int)c2, (int)centerCH2, FBW_MAX_PITCH_DEG, FBW_EXPO_FACTOR);
-
-        // Compensação de Curva Coordenada (Turn Compensation): adiciona atitude positiva de cabrada para compensar perda de sustentação vertical
         float rollRad = fabsf(curRoll) * DEG_TO_RAD;
         float turnPitchCompDeg = constrain(TURN_PITCH_COMP_GAIN * (1.0f - cosf(rollRad)), 0.0f, 3.5f);
         float targetPitchDeg = constrain(pilotTargetPitchDeg + turnPitchCompDeg, -FBW_MAX_PITCH_DEG, FBW_MAX_PITCH_DEG);
@@ -521,21 +572,20 @@ static void controlTaskLoop(void *parameter) {
 
         float pitchError = targetPitchDeg - curPitch;
 
-        // Anti-windup condicional: integra apenas com motor ativo e dentro do envelope seguro
+        // Conditional anti-windup: integrate only with active motor and inside envelope
         if (c3 > 1050 && fabsf(curPitch) <= 45.0f && fabsf(curRoll) <= 60.0f) {
           pitchIntegrator += activePitchKi * pitchError * dt;
-          pitchIntegrator = constrain(pitchIntegrator, -MAX_INTEGRAL_PULSE_US, MAX_INTEGRAL_PULSE_US);
+          pitchIntegrator = constrain(pitchIntegrator, -MAX_INTEGRAL_PULSE_PITCH_US, MAX_INTEGRAL_PULSE_PITCH_US);
         } else {
           pitchIntegrator = 0.0f;
         }
 
         float pitchPidOut = (activePitchKp * pitchError) + pitchIntegrator - (activePitchKd * pitchRateDegS);
-        // Cinemática de Atuação V-Tail: pitchDiff < 0 é CABRAR (BR diminui, BL aumenta)
-        // Com curPitch alto (pitchError < 0 -> pitchPidOut < 0), pitchDiff DEVE ser positivo para PICAR!
-        // Portanto: pitchDiff = -pitchPidOut garante realimentação negativa estável.
+        // V-Tail Kinematics: pitchDiff < 0 is Pitch UP (BR decreases, BL increases).
+        // Therefore pitchDiff = -pitchPidOut enforces stable negative feedback.
         pitchDiff = -constrain((int)pitchPidOut, -anglePulseLimit, anglePulseLimit);
 
-        // 2. ROLL FBW:
+        // Roll FBW:
         if (rollActive) {
           float targetRollDeg = applyExpoAndScaleDeg((int)c1, (int)centerCH1, FBW_MAX_ROLL_DEG, FBW_EXPO_FACTOR);
           currentTargetRoll = targetRollDeg;
@@ -544,7 +594,7 @@ static void controlTaskLoop(void *parameter) {
 
           if (c3 > 1050 && fabsf(curRoll) <= 60.0f) {
             rollIntegrator += activeRollKi * rollError * dt;
-            rollIntegrator = constrain(rollIntegrator, -MAX_INTEGRAL_PULSE_US, MAX_INTEGRAL_PULSE_US);
+            rollIntegrator = constrain(rollIntegrator, -MAX_INTEGRAL_PULSE_ROLL_US, MAX_INTEGRAL_PULSE_ROLL_US);
           } else {
             rollIntegrator = 0.0f;
           }
@@ -558,9 +608,9 @@ static void controlTaskLoop(void *parameter) {
         }
       }
 
-      // ── MODO 3: FLY-BY-WIRE COM APERFEIÇOAMENTO ADAPTATIVO (EXTREMUM SEEKING PI-D) ──
+      // ── MODE 3: ADAPTIVE FLY-BY-WIRE (EXTREMUM SEEKING PI-D) ───────────────
       else {
-        escIsActive = rollActive && !flaperonActive; // Extremum Seeking ativo no eixo de Roll (desativado se flaperons ON)
+        escIsActive = rollActive && !flaperonActive; // Extremum Seeking active on roll (disabled if flaperons ON)
 
         float pitchScale = constrain(escPitchThetaHat, ESC_PITCH_MIN_SCALE, ESC_PITCH_MAX_SCALE);
         float activePitchKp = PID_PITCH_KP * pitchScale;
@@ -571,7 +621,7 @@ static void controlTaskLoop(void *parameter) {
         currentActivePitchKd = activePitchKd;
         escCurrentPitchScale = pitchScale;
 
-        // 1. PITCH FBW PI-D (Controlo em Loop Fechado com Feedback Negativo Estável):
+        // Pitch FBW PI-D (Closed-loop with strictly negative feedback)
         float pilotTargetPitchDeg = -applyExpoAndScaleDeg((int)c2, (int)centerCH2, FBW_MAX_PITCH_DEG, FBW_EXPO_FACTOR);
         float rollRad = fabsf(curRoll) * DEG_TO_RAD;
         float turnPitchCompDeg = constrain(TURN_PITCH_COMP_GAIN * (1.0f - cosf(rollRad)), 0.0f, 3.5f);
@@ -582,7 +632,7 @@ static void controlTaskLoop(void *parameter) {
 
         if (c3 > 1050 && fabsf(curPitch) <= 45.0f && fabsf(curRoll) <= 60.0f) {
           pitchIntegrator += activePitchKi * pitchError * dt;
-          pitchIntegrator = constrain(pitchIntegrator, -MAX_INTEGRAL_PULSE_US, MAX_INTEGRAL_PULSE_US);
+          pitchIntegrator = constrain(pitchIntegrator, -MAX_INTEGRAL_PULSE_PITCH_US, MAX_INTEGRAL_PULSE_PITCH_US);
         } else {
           pitchIntegrator = 0.0f;
         }
@@ -590,7 +640,7 @@ static void controlTaskLoop(void *parameter) {
         float pitchPidOut = (activePitchKp * pitchError) + pitchIntegrator - (activePitchKd * pitchRateDegS);
         pitchDiff = -constrain((int)pitchPidOut, -anglePulseLimit, anglePulseLimit);
 
-        // 2. ROLL FBW COM EXTREMUM SEEKING (Se Roll Active):
+        // Roll FBW with Extremum Seeking
         if (rollActive) {
           float targetRollDeg = applyExpoAndScaleDeg((int)c1, (int)centerCH1, FBW_MAX_ROLL_DEG, FBW_EXPO_FACTOR);
           currentTargetRoll = targetRollDeg;
@@ -606,7 +656,7 @@ static void controlTaskLoop(void *parameter) {
           escCurrentRollScale = effectiveRollTheta;
 
           float activeRollKp = PID_ROLL_KP * effectiveRollTheta;
-          float activeRollKd = PID_ROLL_KD * sqrtf(effectiveRollTheta); // Preserva amortecimento natural zeta
+          float activeRollKd = PID_ROLL_KD * sqrtf(effectiveRollTheta); // Preserves natural damping ratio zeta
           float activeRollKi = PID_ROLL_KI;
 
           currentActiveRollKp = activeRollKp;
@@ -615,7 +665,7 @@ static void controlTaskLoop(void *parameter) {
 
           if (c3 > 1050 && fabsf(curRoll) <= 60.0f) {
             rollIntegrator += activeRollKi * rollError * dt;
-            rollIntegrator = constrain(rollIntegrator, -MAX_INTEGRAL_PULSE_US, MAX_INTEGRAL_PULSE_US);
+            rollIntegrator = constrain(rollIntegrator, -MAX_INTEGRAL_PULSE_ROLL_US, MAX_INTEGRAL_PULSE_ROLL_US);
           } else {
             rollIntegrator = 0.0f;
           }
@@ -642,7 +692,7 @@ static void controlTaskLoop(void *parameter) {
             }
           }
         } else {
-          // Roll OFF: Roll em modo manual direto
+          // Roll OFF: Direct manual roll
           rollDiff = applyExpoAndScale((int)c1, (int)centerCH1, anglePulseLimit, FBW_EXPO_FACTOR);
           rollIntegrator = 0.0f;
           currentTargetRoll = 0.0f;
@@ -662,9 +712,8 @@ static void controlTaskLoop(void *parameter) {
       int pitchOffsetBR = pitchDiff;
       int pitchOffsetBL = -pitchDiff; // Inverted BL (mirrored servo mounting)
 
-      // Flaperons (Landing Flaps): Up to 15 deg DOWN offset on both surfaces,
+      // Flaperons (Landing Flaps): Up to 20 deg DOWN offset on both surfaces,
       // governed smoothly by throttle between 1500us and 1200us (linear uniform transition).
-      // Deflection is calculated directly from each surface's mechanical trim neutral (encaixe mecânico).
       float flaperonScale = 0.0f;
       if (flaperonActive) {
         if (c3 <= FLAPERON_THROTTLE_MIN_US) {
@@ -680,17 +729,19 @@ static void controlTaskLoop(void *parameter) {
       // Dynamic Anti-Saturation & Roll Priority:
       // When roll demand is high, flaperon offset is dynamically scaled by remaining headroom
       // ensuring zero control clipping at stick extremes and protecting mechanical servo limits.
-      float rollDemandRatio = constrain(fabsf((float)rollDiff) / (float)anglePulseLimit, 0.0f, 1.0f);
-      float flaperonHeadroom = 1.0f - rollDemandRatio;
+      // With FLAPERON_MAX_PULSE_LIMIT_US (~356us / 32.0 deg), flaperons maintain 100% deflection (20.0 deg)
+      // during normal steering and gracefully yield only when roll demand approaches extreme limits.
+      float availableHeadroomUs = (float)FLAPERON_MAX_PULSE_LIMIT_US - fabsf((float)rollDiff);
+      float flaperonHeadroom = constrain(availableHeadroomUs / (float)FLAPERON_OFFSET_US, 0.0f, 1.0f);
       float effectiveFlaperonScale = flaperonScale * flaperonHeadroom;
 
       int flaperonOffsetFR = (int)roundf((float)FLAPERON_US_FR * effectiveFlaperonScale);
       int flaperonOffsetFL = (int)roundf((float)FLAPERON_US_FL * effectiveFlaperonScale);
 
-      int rollOffsetFR =
-          flaperonOffsetFR - rollDiff; // Servos physically mirrored: same PWM sign -> opposite
-                                       // mechanical deflection on each wing
-      int rollOffsetFL = flaperonOffsetFL - rollDiff; // idem
+      int rollOffsetFR = flaperonOffsetFR - rollDiff;
+      int rollOffsetFL = flaperonOffsetFL - rollDiff;
+
+      int rollLimitFRFL = (flaperonActive && effectiveFlaperonScale > 0.0f) ? FLAPERON_MAX_PULSE_LIMIT_US : anglePulseLimit;
 
       // Each servo constrained symmetrically around its own trimmed neutral and within hardware limits [1000, 2000] us
       targetBR =
@@ -700,35 +751,196 @@ static void controlTaskLoop(void *parameter) {
           constrain(neutralBL + pitchOffsetBL, neutralBL - anglePulseLimit,
                     neutralBL + anglePulseLimit);
       targetFR =
-          constrain(neutralFR + rollOffsetFR, neutralFR - anglePulseLimit,
-                    neutralFR + anglePulseLimit);
+          constrain(neutralFR + rollOffsetFR, neutralFR - rollLimitFRFL,
+                    neutralFR + rollLimitFRFL);
       targetFL =
-          constrain(neutralFL + rollOffsetFL, neutralFL - anglePulseLimit,
-                    neutralFL + anglePulseLimit);
+          constrain(neutralFL + rollOffsetFL, neutralFL - rollLimitFRFL,
+                    neutralFL + rollLimitFRFL);
 
       targetBR = constrain(targetBR, 1000, 2000);
       targetBL = constrain(targetBL, 1000, 2000);
       targetFR = constrain(targetFR, 1000, 2000);
       targetFL = constrain(targetFL, 1000, 2000);
     } else {
-      // Failsafe: return to trimmed neutral, motor off
-      targetThrottle = THROTTLE_MIN_PULSE;
-      targetBR = neutralBR;
-      targetBL = neutralBL;
-      targetFR = neutralFR;
-      targetFL = neutralFL;
-      resetControlIntegrators();
-      resetExtremumSeeking(false);
-      currentTargetPitch = 0.0f;
-      currentTargetRoll = 0.0f;
-      float rollScale = constrain(escRollThetaHat, ESC_ROLL_MIN_SCALE, ESC_ROLL_MAX_SCALE);
-      escCurrentPitchScale = 1.0f;
-      currentActivePitchKp = 0.0f;
-      currentActivePitchKi = 0.0f;
-      currentActivePitchKd = 0.0f;
-      currentActiveRollKp = PID_ROLL_KP * rollScale;
-      currentActiveRollKi = PID_ROLL_KI;
-      currentActiveRollKd = PID_ROLL_KD * sqrtf(rollScale);
+      wasInFailsafe = true;
+      // ── AUTONOMOUS EMERGENCY FAILSAFE (SIGNAL LOSS RECOVERY) ──────────────
+      if (!wasThrottleAbove1600Ever) {
+        // Ground / Bench Safety Guard: If signal is lost before throttle ever exceeded 1600us,
+        // keep motor strictly OFF (1000us) and control surfaces at trimmed neutral.
+        activeFailsafeStage = FS_STAGE_GROUND;
+        targetThrottle = THROTTLE_MIN_PULSE;
+        targetBR = neutralBR;
+        targetBL = neutralBL;
+        targetFR = neutralFR;
+        targetFL = neutralFL;
+        resetControlIntegrators();
+        resetExtremumSeeking(false);
+        currentTargetPitch = 0.0f;
+        currentTargetRoll = 0.0f;
+        float rollScale = constrain(escRollThetaHat, ESC_ROLL_MIN_SCALE, ESC_ROLL_MAX_SCALE);
+        escCurrentPitchScale = 1.0f;
+        currentActivePitchKp = 0.0f;
+        currentActivePitchKi = 0.0f;
+        currentActivePitchKd = 0.0f;
+        currentActiveRollKp = PID_ROLL_KP * rollScale;
+        currentActiveRollKi = PID_ROLL_KI;
+        currentActiveRollKd = PID_ROLL_KD * sqrtf(rollScale);
+      } else {
+        // In-flight active emergency failsafe:
+        // Stage 1 (Climb): Climb to safe altitude (+20 deg pitch, 1800us) if altitude < 25m
+        // Stage 2 (Loiter): Closed-loop loiter (Roll -30 deg, Pitch +5 deg, Throttle 1500us with altitude adjust)
+        // Stage 3 (Descend): Timeout > 30s or baro failure -> decrement throttle 1us/sec continuously until touchdown
+        float curAlt = 0.0f, baroP = 0.0f, baroT = 0.0f;
+        getBaroData(curAlt, baroP, baroT);
+        bool baroHealthy = isBMP280Available() && !isnan(curAlt) && !isinf(curAlt) && (curAlt > -100.0f);
+        if (!baroHealthy) {
+          int32_t latE7 = 0, lonE7 = 0;
+          int16_t gpsAltX10 = 0;
+          uint8_t sats = 0, fix = 0;
+          getGPSData(latE7, lonE7, gpsAltX10, sats, fix);
+          if (fix >= 2) {
+            curAlt = (float)gpsAltX10 / 10.0f;
+            baroHealthy = true; // Fallback to GPS altitude if barometer is offline
+          }
+        }
+
+        unsigned long nowMs = millis();
+
+        if (activeFailsafeStage == FS_STAGE_INACTIVE || activeFailsafeStage == FS_STAGE_GROUND) {
+          resetControlIntegrators();
+          resetExtremumSeeking(false);
+          failsafeStartTimeMs = nowMs;
+          lastThrottleAltAdjustTimeMs = nowMs;
+          lastStage3StepTimeMs = nowMs;
+          failsafeDynamicThrottleUs = FAILSAFE_LOITER_THROTTLE_BASE_US;
+
+          if (!baroHealthy) {
+            activeFailsafeStage = FS_STAGE_DESCEND;
+          } else if (curAlt < FAILSAFE_CLIMB_ALT_M) {
+            activeFailsafeStage = FS_STAGE_CLIMB;
+          } else {
+            activeFailsafeStage = FS_STAGE_LOITER;
+          }
+        }
+
+        if (activeFailsafeStage == FS_STAGE_CLIMB) {
+          if (!baroHealthy) {
+            activeFailsafeStage = FS_STAGE_DESCEND;
+            lastStage3StepTimeMs = nowMs;
+          } else if (curAlt >= FAILSAFE_CLIMB_ALT_M) {
+            activeFailsafeStage = FS_STAGE_LOITER;
+            lastThrottleAltAdjustTimeMs = nowMs;
+          }
+        } else if (activeFailsafeStage == FS_STAGE_LOITER) {
+          if (!baroHealthy || (nowMs - failsafeStartTimeMs >= FAILSAFE_STAGE2_TIMEOUT_MS)) {
+            activeFailsafeStage = FS_STAGE_DESCEND;
+            lastStage3StepTimeMs = nowMs;
+          }
+        }
+
+        float desiredTargetPitch = FAILSAFE_LOITER_PITCH_DEG; // +5.0 deg (Loiter/Descend default)
+        float desiredTargetRoll = FAILSAFE_LOITER_ROLL_DEG;   // -30.0 deg (Loiter/Descend default)
+        int desiredTargetThrottle = failsafeDynamicThrottleUs;
+
+        if (activeFailsafeStage == FS_STAGE_CLIMB) {
+          desiredTargetPitch = FAILSAFE_CLIMB_PITCH_DEG;   // +20.0 deg
+          desiredTargetRoll = FAILSAFE_CLIMB_ROLL_DEG;     // 0.0 deg (wings level)
+          desiredTargetThrottle = FAILSAFE_CLIMB_THROTTLE_US; // 1800 us
+        } else if (activeFailsafeStage == FS_STAGE_LOITER) {
+          // Stage 2: Adjust throttle smoothly by 1us every 100ms based on altitude
+          if (nowMs - lastThrottleAltAdjustTimeMs >= 100) {
+            lastThrottleAltAdjustTimeMs = nowMs;
+            if (curAlt > FAILSAFE_LOITER_ALT_TARGET_M) {
+              failsafeDynamicThrottleUs -= 1;
+            } else if (curAlt < FAILSAFE_LOITER_ALT_TARGET_M) {
+              failsafeDynamicThrottleUs += 1;
+            }
+            failsafeDynamicThrottleUs = constrain(failsafeDynamicThrottleUs, FAILSAFE_LOITER_MIN_THROTTLE_US, THROTTLE_MAX_PULSE);
+          }
+          desiredTargetThrottle = failsafeDynamicThrottleUs;
+        } else {
+          // Stage 3: Smooth descent ramping down 1us every second
+          if (nowMs - lastStage3StepTimeMs >= 1000) {
+            lastStage3StepTimeMs = nowMs;
+            if (failsafeDynamicThrottleUs > THROTTLE_MIN_PULSE) {
+              failsafeDynamicThrottleUs -= 1;
+            }
+            failsafeDynamicThrottleUs = constrain(failsafeDynamicThrottleUs, THROTTLE_MIN_PULSE, THROTTLE_MAX_PULSE);
+          }
+          desiredTargetThrottle = failsafeDynamicThrottleUs;
+        }
+
+        // Linear slew rate ramps for smooth attitude and throttle transitions
+        if (currentSlewThrottle < desiredTargetThrottle) {
+          currentSlewThrottle = min(desiredTargetThrottle, currentSlewThrottle + FAILSAFE_THROTTLE_SLEW_US_PER_TICK);
+        } else if (currentSlewThrottle > desiredTargetThrottle) {
+          currentSlewThrottle = max(desiredTargetThrottle, currentSlewThrottle - FAILSAFE_THROTTLE_SLEW_US_PER_TICK);
+        }
+
+        if (currentSlewTargetPitch < desiredTargetPitch) {
+          currentSlewTargetPitch = min(desiredTargetPitch, currentSlewTargetPitch + FAILSAFE_PITCH_SLEW_DEG_PER_TICK);
+        } else if (currentSlewTargetPitch > desiredTargetPitch) {
+          currentSlewTargetPitch = max(desiredTargetPitch, currentSlewTargetPitch - FAILSAFE_PITCH_SLEW_DEG_PER_TICK);
+        }
+
+        if (currentSlewTargetRoll < desiredTargetRoll) {
+          currentSlewTargetRoll = min(desiredTargetRoll, currentSlewTargetRoll + FAILSAFE_ROLL_SLEW_DEG_PER_TICK);
+        } else if (currentSlewTargetRoll > desiredTargetRoll) {
+          currentSlewTargetRoll = max(desiredTargetRoll, currentSlewTargetRoll - FAILSAFE_ROLL_SLEW_DEG_PER_TICK);
+        }
+
+        targetThrottle = currentSlewThrottle;
+        if (isLowVoltageCutoffTriggered() && targetThrottle > THROTTLE_LOW_VOLT_CEILING_PULSE) {
+          targetThrottle = THROTTLE_LOW_VOLT_CEILING_PULSE;
+        }
+
+        currentTargetPitch = currentSlewTargetPitch;
+        currentTargetRoll = currentSlewTargetRoll;
+
+        // Closed-loop PI-D attitude control with nominal gains
+        currentActivePitchKp = PID_PITCH_KP;
+        currentActivePitchKi = PID_PITCH_KI;
+        currentActivePitchKd = PID_PITCH_KD;
+        currentActiveRollKp = PID_ROLL_KP;
+        currentActiveRollKi = PID_ROLL_KI;
+        currentActiveRollKd = PID_ROLL_KD;
+
+        float pitchError = currentTargetPitch - curPitch;
+        if (fabsf(curPitch) <= 45.0f && fabsf(curRoll) <= 60.0f) {
+          pitchIntegrator += currentActivePitchKi * pitchError * dt;
+          pitchIntegrator = constrain(pitchIntegrator, -MAX_INTEGRAL_PULSE_PITCH_US, MAX_INTEGRAL_PULSE_PITCH_US);
+        } else {
+          pitchIntegrator = 0.0f;
+        }
+        float pitchPidOut = (currentActivePitchKp * pitchError) + pitchIntegrator - (currentActivePitchKd * pitchRateDegS);
+        int pitchDiff = -constrain((int)pitchPidOut, -anglePulseLimit, anglePulseLimit);
+
+        float rollError = currentTargetRoll - curRoll;
+        if (fabsf(curRoll) <= 60.0f) {
+          rollIntegrator += currentActiveRollKi * rollError * dt;
+          rollIntegrator = constrain(rollIntegrator, -MAX_INTEGRAL_PULSE_ROLL_US, MAX_INTEGRAL_PULSE_ROLL_US);
+        } else {
+          rollIntegrator = 0.0f;
+        }
+        float rollPidOut = (currentActiveRollKp * rollError) + rollIntegrator - (currentActiveRollKd * rollRateDegS);
+        int rollDiff = constrain((int)rollPidOut, -anglePulseLimit, anglePulseLimit);
+
+        // V-Tail & Rollerons Actuator Mixer (Flaperons retracted in failsafe)
+        int pitchOffsetBR = pitchDiff;
+        int pitchOffsetBL = -pitchDiff;
+        int rollOffsetFR = -rollDiff;
+        int rollOffsetFL = -rollDiff;
+
+        targetBR = constrain(neutralBR + pitchOffsetBR, neutralBR - anglePulseLimit, neutralBR + anglePulseLimit);
+        targetBL = constrain(neutralBL + pitchOffsetBL, neutralBL - anglePulseLimit, neutralBL + anglePulseLimit);
+        targetFR = constrain(neutralFR + rollOffsetFR, neutralFR - anglePulseLimit, neutralFR + anglePulseLimit);
+        targetFL = constrain(neutralFL + rollOffsetFL, neutralFL - anglePulseLimit, neutralFL + anglePulseLimit);
+
+        targetBR = constrain(targetBR, 1000, 2000);
+        targetBL = constrain(targetBL, 1000, 2000);
+        targetFR = constrain(targetFR, 1000, 2000);
+        targetFL = constrain(targetFL, 1000, 2000);
+      }
     }
 
     updateOutputChannel(0, servoBR, targetBR);
@@ -750,7 +962,9 @@ bool setThrottlePulse(int pulseWidthUs) {
       pulseWidthUs <= THROTTLE_MAX_PULSE) {
     if (pulseWidthUs != lastWritePulseUs[4]) {
       escMotor.writeMicroseconds(pulseWidthUs);
+      portENTER_CRITICAL(&actuatorMux);
       lastWritePulseUs[4] = pulseWidthUs;
+      portEXIT_CRITICAL(&actuatorMux);
     }
     return true;
   }
@@ -760,11 +974,18 @@ bool setThrottlePulse(int pulseWidthUs) {
 void emergencyCutoffESC() {
   if (lastWritePulseUs[4] != THROTTLE_MIN_PULSE) {
     escMotor.writeMicroseconds(THROTTLE_MIN_PULSE);
+    portENTER_CRITICAL(&actuatorMux);
     lastWritePulseUs[4] = THROTTLE_MIN_PULSE;
+    portEXIT_CRITICAL(&actuatorMux);
   }
 }
 
-int getCurrentThrottlePulse() { return lastWritePulseUs[4]; }
+int getCurrentThrottlePulse() {
+  portENTER_CRITICAL(&actuatorMux);
+  int val = lastWritePulseUs[4];
+  portEXIT_CRITICAL(&actuatorMux);
+  return val;
+}
 
 void initControlSystem() {
   ESP32PWM::allocateTimer(0);
@@ -799,6 +1020,7 @@ void initControlSystem() {
   escMotor.writeMicroseconds(lastWritePulseUs[4]);
 
   resetExtremumSeeking(true); // Cold boot initialization
+  wasThrottleAbove1600Ever = false;
 
   xTaskCreatePinnedToCore(controlTaskLoop, "ControlTask", 4096, NULL, 5, NULL,
                           0);

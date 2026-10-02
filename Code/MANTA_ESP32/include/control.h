@@ -10,6 +10,17 @@ enum FlightMode : uint8_t {
   FLIGHT_MODE_3 = 3
 };
 
+// Autonomous Emergency Failsafe Stages on RC Signal Loss
+enum FailsafeStage : uint8_t {
+  FS_STAGE_INACTIVE = 0, // Normal RC flight active
+  FS_STAGE_GROUND   = 1, // RC lost on ground/bench: motor OFF, surfaces neutral
+  FS_STAGE_CLIMB    = 2, // Stage 1: Closed-loop climb
+  FS_STAGE_LOITER   = 3, // Stage 2: Closed-loop loiter at roll -30 deg, pitch 5 deg, dynamic 25m alt hold
+  FS_STAGE_DESCEND  = 4  // Stage 3: Loiter at roll -30 deg, pitch 5 deg, continuous 1us/s throttle decay (timeout >30s or baro failure)
+};
+
+FailsafeStage getActiveFailsafeStage();
+
 void initControlSystem();
 bool setThrottlePulse(int pulseWidthUs);
 void emergencyCutoffESC();

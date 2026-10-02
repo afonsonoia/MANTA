@@ -11,7 +11,7 @@ import openpyxl
 from openpyxl import Workbook
 import json
 from raw_lora_logger import AsyncRawLoRaLogger
-from telemetry_codec import decode_telemetry, PACKET_SIZE
+from telemetry_codec import decode_telemetry, PACKET_SIZE, SUPPORTED_PACKET_SIZES, SUPPORTED_PACKET_SIZES_DESC
 
 # Try importing matplotlib for embedded live plot
 HAS_MATPLOTLIB = False
@@ -711,7 +711,7 @@ class BatteryAnalyzerGUI:
                         raw_bytes_buffer.extend(data)
                         if len(raw_bytes_buffer) > 2048:
                             raw_bytes_buffer = raw_bytes_buffer[-512:]
-                        while len(raw_bytes_buffer) >= PACKET_SIZE:
+                        while len(raw_bytes_buffer) >= min(SUPPORTED_PACKET_SIZES):
                             idx = raw_bytes_buffer.find(b'MT')
                             if idx == -1:
                                 if len(raw_bytes_buffer) > 1:
@@ -719,20 +719,30 @@ class BatteryAnalyzerGUI:
                                 break
                             if idx > 0:
                                 raw_bytes_buffer = raw_bytes_buffer[idx:]
-                            if len(raw_bytes_buffer) < PACKET_SIZE:
-                                break
 
-                            pkt_bin = bytes(raw_bytes_buffer[:PACKET_SIZE])
-                            decoded_pkt = decode_telemetry(pkt_bin)
+                            decoded_pkt = None
+                            matched_size = 0
+                            for cand_size in SUPPORTED_PACKET_SIZES_DESC:
+                                if len(raw_bytes_buffer) >= cand_size:
+                                    candidate = bytes(raw_bytes_buffer[:cand_size])
+                                    res = decode_telemetry(candidate)
+                                    if res is not None:
+                                        decoded_pkt = res
+                                        matched_size = cand_size
+                                        break
+
                             if decoded_pkt is not None:
-                                rec_v = decoded_pkt.get("batteryVoltage", 0.0)
+                                rec_v = decoded_pkt.get("batteryVoltage", decoded_pkt.get("battery_v", 0.0))
                                 raw_adc = decoded_pkt.get("rawADC", 0.0)
                                 self._process_voltage_sample(rec_v, raw_adc)
                                 if "rc5" in decoded_pkt and decoded_pkt["rc5"] > 0:
                                     self.last_manta_ch5 = decoded_pkt["rc5"]
-                                raw_bytes_buffer = raw_bytes_buffer[PACKET_SIZE:]
+                                raw_bytes_buffer = raw_bytes_buffer[matched_size:]
                             else:
-                                raw_bytes_buffer = raw_bytes_buffer[1:]
+                                if len(raw_bytes_buffer) >= max(SUPPORTED_PACKET_SIZES):
+                                    raw_bytes_buffer = raw_bytes_buffer[1:]
+                                else:
+                                    break
 
                         buffer += data.decode('utf-8', errors='ignore')
                         while '\n' in buffer:

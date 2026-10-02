@@ -23,8 +23,8 @@ from telemetry_codec import decode_telemetry, encode_telemetry, decode_ch5_mode,
 
 # Config
 DEFAULT_BAUD = 115200
-LOG_DIR = 'flight_logs'
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+LOG_DIR = os.path.join(_SCRIPT_DIR, 'flight_logs')
 _ROOT_DIR = os.path.abspath(os.path.join(_SCRIPT_DIR, '..', '..'))
 if os.path.exists(os.path.join(_ROOT_DIR, 'imu_calibration.json')):
     CALIB_FILE = os.path.join(_ROOT_DIR, 'imu_calibration.json')
@@ -33,22 +33,24 @@ elif os.path.exists('imu_calibration.json'):
 else:
     CALIB_FILE = os.path.join(_ROOT_DIR, 'imu_calibration.json')
 
-def get_next_flight_log_filename(log_dir=LOG_DIR):
-    """Scans flight_logs/ directory and returns the next sequential flight log CSV filename."""
+def get_next_flight_log_filename(log_dir=None):
+    """Scans flight_logs/ directory recursively and returns the next sequential flight log CSV filename."""
+    if log_dir is None:
+        log_dir = LOG_DIR
     os.makedirs(log_dir, exist_ok=True)
-    existing_files = os.listdir(log_dir)
     
     max_idx = 0
     pattern = re.compile(r'manta_flight_(\d+)', re.IGNORECASE)
-    for fname in existing_files:
-        match = pattern.search(fname)
-        if match:
-            try:
-                idx = int(match.group(1))
-                if idx > max_idx:
-                    max_idx = idx
-            except ValueError:
-                pass
+    for root, _, files in os.walk(log_dir):
+        for fname in files:
+            match = pattern.search(fname)
+            if match:
+                try:
+                    idx = int(match.group(1))
+                    if idx > max_idx:
+                        max_idx = idx
+                except ValueError:
+                    pass
 
     next_idx = max_idx + 1
     timestamp_str = time.strftime("%Y%m%d_%H%M%S")
@@ -76,9 +78,16 @@ def calculate_battery_pct(voltage: float) -> int:
 latest_pitch = 0.0
 latest_roll = 0.0
 latest_yaw = 0.0
+latest_ax = 0
+latest_ay = 0
+latest_az = 0
 latest_gx = 0
 latest_gy = 0
 latest_gz = 0
+latest_ax_g = 0.0
+latest_ay_g = 0.0
+latest_az_g = 0.0
+latest_total_accel_g = 1.0
 latest_lat = 0.0
 latest_lon = 0.0
 latest_alt = 0.0
@@ -163,12 +172,15 @@ class AsyncTelemetryLogger:
             "Record Number", "ESP32 Timestamp (ms)", "Elapsed Time (s)", "Packet Seq",
             "Pitch (deg)", "Roll (deg)", "Yaw (deg)",
             "Accel X (LSB)", "Accel Y (LSB)", "Accel Z (LSB)",
+            "Accel X (g)", "Accel Y (g)", "Accel Z (g)", "Total Accel (g)",
+            "Accel X (m/s^2)", "Accel Y (m/s^2)", "Accel Z (m/s^2)",
             "Gyro X (LSB)", "Gyro Y (LSB)", "Gyro Z (LSB)",
+            "Gyro X (deg/s)", "Gyro Y (deg/s)", "Gyro Z (deg/s)",
             "RC1 Roll (us)", "RC2 Pitch (us)", "RC3 Throttle (us)", "RC5 Mode (us)",
             "Servo BR (us)", "Servo BL (us)", "Servo FR (us)", "Servo FL (us)", "ESC Throttle (us)",
-            "Battery Voltage (V)", "Altitude (m)", "RC Signal Lost", "Flaperons Active",
+            "Battery Voltage (V)", "Altitude (m)", "RC Signal Lost", "RC Data Received", "Flaperons Active",
             "Latitude", "Longitude", "Satellites", "Fix Type", "RSSI (dBm)", "SNR (dB)",
-            "Flight Mode", "ESC Active",
+            "Flight Mode", "ESC Active", "Failsafe Stage",
             "Pitch Kp", "Pitch Ki", "Pitch Kd",
             "Roll Kp", "Roll Ki", "Roll Kd"
         ]
@@ -181,7 +193,7 @@ class AsyncTelemetryLogger:
         self.csv_writer = csv.writer(self.csv_file)
         self.csv_writer.writerow(self.headers)
         self.csv_file.flush()
-        print(f"[Telemetry Logger] Novo ficheiro de voo iniciado em: '{self.filename}'.")
+        print(f"[Telemetry Logger] New flight log started at: '{self.filename}'.")
 
         self.is_running = True
         self.worker_thread = threading.Thread(target=self._worker_loop, daemon=True)
@@ -191,39 +203,26 @@ class AsyncTelemetryLogger:
         if self.is_running:
             try:
                 self.queue.put_nowait(row)
-            except queue.Full:
-                pass
-
-    def _worker_loop(self):
-        last_flush = time.time()
-        while self.is_running:
-            try:
-                row = self.queue.get(timeout=0.1)
-                if row is not None and self.csv_writer is not None:
-                    self.csv_writer.writerow(row)
-                    self.record_count += 1
-                self.queue.task_done()
-            except queue.Empty:
-                pass
             except Exception:
                 pass
 
-            # Drain batch
-            while not self.queue.empty():
+    def _worker_loop(self):
+        while self.is_running or not self.queue.empty():
+            try:
+                row = self.queue.get(timeout=0.1)
+            except queue.Empty:
+                continue
+
+            if row is not None and self.csv_writer is not None:
                 try:
-                    row = self.queue.get_nowait()
-                    if row is not None and self.csv_writer is not None:
-                        self.csv_writer.writerow(row)
-                        self.record_count += 1
-                    self.queue.task_done()
-                except queue.Empty:
-                    break
+                    self.csv_writer.writerow(row)
+                    self.record_count += 1
                 except Exception:
                     pass
+                self.queue.task_done()
 
-            now = time.time()
-            if (now - last_flush) >= 1.0 and self.csv_file:
-                last_flush = now
+            # Flush sequentially to protect against data loss
+            if (self.record_count % 10) == 0:
                 try:
                     self.csv_file.flush()
                 except Exception:
@@ -250,7 +249,7 @@ class AsyncTelemetryLogger:
                 self.csv_file.close()
             except Exception:
                 pass
-        print(f"[MANTA Ground Station] Registo final guardado em {self.filename} ({self.record_count} registos).")
+        print(f"[MANTA Ground Station] Final log saved to {self.filename} ({self.record_count} records).")
 
 def kill_mission_planner():
     """Terminates Mission Planner process cleanly and kills any running instances."""
@@ -269,7 +268,7 @@ def kill_mission_planner():
 def global_shutdown(signum=None, frame=None):
     """Cleanly terminates Ground Station, saves Excel, closes Mission Planner, and exits immediately."""
     global active_serial_conn, excel_logger
-    print("\n[MANTA Ground Station] A encerrar processos...")
+    print("\n[MANTA Ground Station] Shutting down processes...")
     
     if active_serial_conn and active_serial_conn.is_open:
         try:
@@ -284,7 +283,7 @@ def global_shutdown(signum=None, frame=None):
             pass
 
     kill_mission_planner()
-    print("[MANTA Ground Station] Terminado com sucesso.")
+    print("[MANTA Ground Station] Terminated successfully.")
     os._exit(0)
 
 def launch_mission_planner():
@@ -301,12 +300,12 @@ def launch_mission_planner():
         if os.path.exists(p):
             try:
                 mission_planner_proc = subprocess.Popen([p], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                print(f"[Mission Planner] Mission Planner aberto automaticamente a partir de: '{p}'")
+                print(f"[Mission Planner] Mission Planner launched automatically from: '{p}'")
                 return True
             except Exception as e:
-                print(f"[Mission Planner Launch Error] Falha ao abrir Mission Planner: {e}")
+                print(f"[Mission Planner Launch Error] Failed to launch Mission Planner: {e}")
 
-    print("[Mission Planner] Caminho do MissionPlanner.exe não foi encontrado automaticamente.")
+    print("[Mission Planner] MissionPlanner.exe path was not found automatically.")
     return False
 
 def load_calibration():
@@ -371,20 +370,22 @@ def auto_find_com_port(preferred_port=None):
 def run_bridge(port_name=None, launch_mp=True):
     """Main CLI execution loop for LoRa Telemetry & MAVLink Mission Planner Bridge."""
     global active_serial_conn, latest_estimated_voltage, latest_pitch, latest_roll, latest_yaw
+    global latest_ax, latest_ay, latest_az, latest_gx, latest_gy, latest_gz
+    global latest_ax_g, latest_ay_g, latest_az_g, latest_total_accel_g
     global latest_alt, latest_lat, latest_lon, latest_temp, latest_satellites, latest_fix_type, latest_rc
     global last_rssi, last_snr, rc_signal_lost, excel_logger
 
     load_calibration()
     port = auto_find_com_port(port_name)
     if not port:
-        print("[Erro] Nenhuma porta COM detetada! Conecte o ESP32 da Ground Station.")
+        print("[Error] No COM port detected! Connect the Ground Station ESP32.")
         return
 
     print("=" * 60)
-    print("      MANTA 20 Hz TELEMETRY & MISSION PLANNER BRIDGE")
+    print("      MANTA 5 Hz TELEMETRY & MISSION PLANNER BRIDGE")
     print("=" * 60)
-    print(f"Porta COM Ground Station : {port} @ {DEFAULT_BAUD} baud")
-    print(f"Ponte MAVLink UDP        : 127.0.0.1:14550")
+    print(f"Ground Station COM Port  : {port} @ {DEFAULT_BAUD} baud")
+    print(f"MAVLink UDP Bridge       : 127.0.0.1:14550")
     print("-" * 60)
 
     excel_logger = AsyncTelemetryLogger()
@@ -393,18 +394,18 @@ def run_bridge(port_name=None, launch_mp=True):
     try:
         ser = serial.Serial(port, DEFAULT_BAUD, timeout=0.01)
         active_serial_conn = ser
-        print(f"[Conexão] Conectado com sucesso a {port}!")
+        print(f"[Connection] Successfully connected to {port}!")
     except Exception as e:
-        print(f"[Erro Conexão] Falha ao abrir {port}: {e}")
+        print(f"[Connection Error] Failed to open {port}: {e}")
         return
 
     mav_conn = None
     if HAS_PYMAVLINK:
         try:
             mav_conn = mavutil.mavlink_connection('udpout:127.0.0.1:14550', source_system=1, source_component=1)
-            print("[MAVLink] Ligação UDP iniciada para 127.0.0.1:14550.")
+            print("[MAVLink] UDP link initialized to 127.0.0.1:14550.")
         except Exception as e:
-            print(f"[MAVLink Warning] Falha ao criar ligação MAVLink: {e}")
+            print(f"[MAVLink Warning] Failed to initialize MAVLink connection: {e}")
 
     if launch_mp:
         launch_mission_planner()
@@ -422,6 +423,7 @@ def run_bridge(port_name=None, launch_mp=True):
     cumulative_flight_time = 0.0
     last_flight_tick = start_time
     last_alt_calc = 0.0
+    first_alt_sample = True
     last_alt_time = start_time
     filtered_climb_rate = 0.0
     estimated_airspeed = 0.0
@@ -429,8 +431,16 @@ def run_bridge(port_name=None, launch_mp=True):
     latest_flaperon_active = False
     last_notified_mode = None
     last_notified_flaperon_active = None
+    last_notified_rc_lost = None
 
-    print("\n[Telemetria Ativa - Simplex Downlink] A receber pacotes LoRa da MANTA... (Pressione Ctrl+C para sair)\n")
+    # Home Position tracking for Mission Planner Return-to-Home & Distance-to-Home
+    home_position_set = False
+    home_lat_e7 = 0
+    home_lon_e7 = 0
+    home_alt_mm = 0
+    last_home_tx = 0.0
+
+    print("\n[Active Telemetry - Simplex Downlink] Receiving LoRa packets from MANTA... (Press Ctrl+C to exit)\n")
 
     try:
         while True:
@@ -474,13 +484,34 @@ def run_bridge(port_name=None, launch_mp=True):
                             raw_bytes_buffer = raw_bytes_buffer[matched_size:]
                             latest_pitch = decoded_pkt.get("pitch", latest_pitch)
                             latest_roll = decoded_pkt.get("roll", latest_roll)
+                            latest_ax = decoded_pkt.get("accel_x", latest_ax)
+                            latest_ay = decoded_pkt.get("accel_y", latest_ay)
+                            latest_az = decoded_pkt.get("accel_z", latest_az)
+                            latest_gx = decoded_pkt.get("gyro_x", latest_gx)
+                            latest_gy = decoded_pkt.get("gyro_y", latest_gy)
+                            latest_gz = decoded_pkt.get("gyro_z", latest_gz)
+
+                            # Scale raw IMU counts to physical units
+                            # MPU6050 @ +/- 2g range = 16384 LSB/g; Gyro @ +/- 1000 deg/s range = 32.8 LSB/(deg/s)
+                            latest_ax_g = round(latest_ax / 16384.0, 3)
+                            latest_ay_g = round(latest_ay / 16384.0, 3)
+                            latest_az_g = round(-latest_az / 16384.0, 3)  # Inverted Z: upright flat resting is +1.0g
+                            latest_total_accel_g = round(math.sqrt(latest_ax_g**2 + latest_ay_g**2 + latest_az_g**2), 2)
                             raw_bat = decoded_pkt.get("batteryVoltage", decoded_pkt.get("battery_v", None))
                             if raw_bat is not None and raw_bat > 0:
                                 battery_voltage_history.append(raw_bat)
                                 latest_estimated_voltage = round(sum(battery_voltage_history) / len(battery_voltage_history), 2)
-                            latest_alt = decoded_pkt.get("alt", latest_alt)
-                            latest_lat = decoded_pkt.get("latitude", decoded_pkt.get("lat", latest_lat))
-                            latest_lon = decoded_pkt.get("longitude", decoded_pkt.get("lon", latest_lon))
+                            raw_alt = decoded_pkt.get("alt", None)
+                            gps_alt_val = decoded_pkt.get("gps_alt", None)
+                            if raw_alt is not None and raw_alt != -1.0:
+                                latest_alt = raw_alt
+                            elif gps_alt_val is not None and gps_alt_val > 0:
+                                latest_alt = gps_alt_val
+                            pkt_lat = decoded_pkt.get("latitude", decoded_pkt.get("lat", 0.0))
+                            pkt_lon = decoded_pkt.get("longitude", decoded_pkt.get("lon", 0.0))
+                            if pkt_lat != 0.0 or pkt_lon != 0.0:
+                                latest_lat = pkt_lat
+                                latest_lon = pkt_lon
                             latest_satellites = decoded_pkt.get("satellites", decoded_pkt.get("sats", latest_satellites))
                             latest_fix_type = decoded_pkt.get("fix_type", decoded_pkt.get("fixType", latest_fix_type))
                             
@@ -497,9 +528,23 @@ def run_bridge(port_name=None, launch_mp=True):
                                 ]
 
                             latest_flight_mode = decoded_pkt.get("flight_mode", decoded_pkt.get("flightMode", 1))
+                            latest_failsafe_stage = decoded_pkt.get("failsafe_stage", decoded_pkt.get("failsafeStage", 0))
+                            latest_failsafe_name = decoded_pkt.get("failsafe_stage_name", "UNKNOWN")
                             rc_signal_lost = decoded_pkt.get("rcSignalLost", decoded_pkt.get("rc_signal_lost", False))
+                            rc_data_received = decoded_pkt.get("rc_data_received", decoded_pkt.get("rc_received", not rc_signal_lost))
                             is_flaperon_active = decoded_pkt.get("flaperon_active", decoded_pkt.get("flaperonActive", decoded_pkt.get("isAssistMode", False)))
                             latest_flaperon_active = is_flaperon_active
+
+                            # Detect RC signal loss / recovery transition and display notification
+                            if last_notified_rc_lost is None:
+                                last_notified_rc_lost = rc_signal_lost
+                            elif rc_signal_lost != last_notified_rc_lost:
+                                if rc_signal_lost:
+                                    sys.stdout.write(f"\n[WARNING] -> RC SIGNAL LOST (Active Failsafe Stage {latest_failsafe_stage}: {latest_failsafe_name})\n")
+                                else:
+                                    sys.stdout.write("\n[RC LINK] -> Transmitter Link Restored (RC Data Active)\n")
+                                sys.stdout.flush()
+                                last_notified_rc_lost = rc_signal_lost
 
                             # Detect flight mode transition and display confirmation notice
                             if not rc_signal_lost:
@@ -515,10 +560,17 @@ def run_bridge(port_name=None, launch_mp=True):
                                         m_tag = "M3:ESC"
                                     else:
                                         m_tag = f"M{latest_flight_mode}" + ("+FLAP" if latest_flaperon_active else "")
-                                    sys.stdout.write(f"\n[PILOTO - MODO ALTERADO] -> {m_tag} (Feedback Sonoro 0.7s ativo)\n")
+                                    sys.stdout.write(f"\n[PILOT - MODE CHANGED] -> {m_tag} (0.7s Audio Feedback Active)\n")
                                     sys.stdout.flush()
                                     last_notified_mode = latest_flight_mode
                                     last_notified_flaperon_active = latest_flaperon_active
+
+                            ax_mps2 = round(latest_ax_g * 9.80665, 2)
+                            ay_mps2 = round(latest_ay_g * 9.80665, 2)
+                            az_mps2 = round(latest_az_g * 9.80665, 2)
+                            gx_dps = round(latest_gx / 32.8, 1)
+                            gy_dps = round(latest_gy / 32.8, 1)
+                            gz_dps = round(latest_gz / 32.8, 1)
 
                             now = time.time()
                             elapsed_sec = round(now - start_time, 2)
@@ -531,12 +583,22 @@ def run_bridge(port_name=None, launch_mp=True):
                                     round(latest_pitch, 2),
                                     round(latest_roll, 2),
                                     round(latest_yaw, 2),
-                                    decoded_pkt.get("accel_x", 0),
-                                    decoded_pkt.get("accel_y", 0),
-                                    decoded_pkt.get("accel_z", 0),
-                                    decoded_pkt.get("gyro_x", 0),
-                                    decoded_pkt.get("gyro_y", 0),
-                                    decoded_pkt.get("gyro_z", 0),
+                                    latest_ax,
+                                    latest_ay,
+                                    latest_az,
+                                    latest_ax_g,
+                                    latest_ay_g,
+                                    latest_az_g,
+                                    latest_total_accel_g,
+                                    ax_mps2,
+                                    ay_mps2,
+                                    az_mps2,
+                                    latest_gx,
+                                    latest_gy,
+                                    latest_gz,
+                                    gx_dps,
+                                    gy_dps,
+                                    gz_dps,
                                     latest_rc[0],
                                     latest_rc[1],
                                     latest_rc[2],
@@ -549,6 +611,7 @@ def run_bridge(port_name=None, launch_mp=True):
                                     latest_estimated_voltage,
                                     latest_alt,
                                     1 if rc_signal_lost else 0,
+                                    1 if rc_data_received else 0,
                                     1 if is_flaperon_active else 0,
                                     latest_lat,
                                     latest_lon,
@@ -558,6 +621,7 @@ def run_bridge(port_name=None, launch_mp=True):
                                     last_snr if last_snr is not None else "",
                                     decoded_pkt.get("flight_mode", decoded_pkt.get("flightMode", 1)),
                                     1 if decoded_pkt.get("isEscActive", False) else 0,
+                                    decoded_pkt.get("failsafe_stage", decoded_pkt.get("failsafeStage", 0)),
                                     decoded_pkt.get("pitch_kp", 9.35),
                                     decoded_pkt.get("pitch_ki", 5.00),
                                     decoded_pkt.get("pitch_kd", 0.623),
@@ -591,7 +655,7 @@ def run_bridge(port_name=None, launch_mp=True):
                     except Exception:
                         pass
             except (serial.SerialException, OSError) as e:
-                print(f"\n[Aviso Porta Série] Erro de I/O em {port}: {e}. A tentar reconectar...")
+                print(f"\n[Serial Port Warning] I/O Error on {port}: {e}. Retrying connection...")
                 try:
                     ser.close()
                 except Exception:
@@ -600,7 +664,7 @@ def run_bridge(port_name=None, launch_mp=True):
                 try:
                     ser = serial.Serial(port, DEFAULT_BAUD, timeout=0.01)
                     active_serial_conn = ser
-                    print(f"[Conexão] Reconectado com sucesso a {port}!")
+                    print(f"[Connection] Successfully reconnected to {port}!")
                 except Exception:
                     pass
                 continue
@@ -634,9 +698,14 @@ def run_bridge(port_name=None, launch_mp=True):
             # Climb rate from barometric altitude derivative (low-pass filtered)
             dt_alt = now_time - last_alt_time
             if dt_alt >= 0.1:
-                raw_climb = (latest_alt - last_alt_calc) / dt_alt
-                filtered_climb_rate = 0.7 * filtered_climb_rate + 0.3 * raw_climb
-                last_alt_calc = latest_alt
+                if first_alt_sample:
+                    last_alt_calc = latest_alt
+                    filtered_climb_rate = 0.0
+                    first_alt_sample = False
+                else:
+                    raw_climb = (latest_alt - last_alt_calc) / dt_alt
+                    filtered_climb_rate = 0.7 * filtered_climb_rate + 0.3 * raw_climb
+                    last_alt_calc = latest_alt
                 last_alt_time = now_time
 
             # MAVLink 20 Hz Streaming
@@ -660,7 +729,19 @@ def run_bridge(port_name=None, launch_mp=True):
 
                     batt_mv = int(max(0.0, latest_estimated_voltage) * 1000)
                     batt_pct = calculate_battery_pct(latest_estimated_voltage)
-                    sensors_mask = (mavutil.mavlink.MAV_SYS_STATUS_SENSOR_3D_GYRO | mavutil.mavlink.MAV_SYS_STATUS_SENSOR_3D_ACCEL | mavutil.mavlink.MAV_SYS_STATUS_SENSOR_BATTERY)
+                    lat_e7 = int(round(latest_lat * 1e7))
+                    lon_e7 = int(round(latest_lon * 1e7))
+                    has_gps_pos = (lat_e7 != 0 or lon_e7 != 0)
+
+                    sensors_mask = (
+                        mavutil.mavlink.MAV_SYS_STATUS_SENSOR_3D_GYRO |
+                        mavutil.mavlink.MAV_SYS_STATUS_SENSOR_3D_ACCEL |
+                        mavutil.mavlink.MAV_SYS_STATUS_SENSOR_ABSOLUTE_PRESSURE |
+                        mavutil.mavlink.MAV_SYS_STATUS_SENSOR_BATTERY
+                    )
+                    if has_gps_pos:
+                        sensors_mask |= mavutil.mavlink.MAV_SYS_STATUS_SENSOR_GPS
+
                     mav_conn.mav.sys_status_send(sensors_mask, sensors_mask, sensors_mask, 500, batt_mv, -1, batt_pct, 0, 0, 0, 0, 0, 0)
                     mav_conn.mav.battery_status_send(
                         0,
@@ -697,29 +778,119 @@ def run_bridge(port_name=None, launch_mp=True):
                     )
 
                     vz_cms = int(-filtered_climb_rate * 100)  # NED: down is positive
+                    gpos_lat = lat_e7 if has_gps_pos else 0
+                    gpos_lon = lon_e7 if has_gps_pos else 0
 
+                    # 2D ground velocity vector for Mission Planner flight path projection
+                    if has_gps_pos:
+                        vx_cms = int(round(estimated_airspeed * math.cos(math.radians(latest_yaw)) * 100))
+                        vy_cms = int(round(estimated_airspeed * math.sin(math.radians(latest_yaw)) * 100))
+                    else:
+                        vx_cms = 0
+                        vy_cms = 0
+
+                    # Broadcast GLOBAL_POSITION_INT continuously.
+                    # This is the primary MAVLink message that Mission Planner's HUD and Quick Tab
+                    # consume to display altitude (CurrentState.alt = loc.relative_alt / 1000.0f).
+                    # When lat/lon are 0 (no GPS fix/indoors), Mission Planner sets useLocation=false
+                    # so the map does not move, while altitude is updated correctly.
                     mav_conn.mav.global_position_int_send(
                         time_boot_ms,
-                        int(latest_lat * 1e7),
-                        int(latest_lon * 1e7),
+                        gpos_lat,
+                        gpos_lon,
                         alt_mm,
                         alt_mm,
-                        0, 0, vz_cms,
+                        vx_cms, vy_cms, vz_cms,
                         int((latest_yaw % 360) * 100)
                     )
 
+                    # Establish Home position on first valid 2D/3D GPS lock, or keep established home
+                    if has_gps_pos and int(latest_fix_type) >= 2:
+                        if not home_position_set:
+                            home_lat_e7 = lat_e7
+                            home_lon_e7 = lon_e7
+                            home_alt_mm = alt_mm
+                            home_position_set = True
+                            try:
+                                mav_conn.mav.home_position_send(
+                                    home_lat_e7, home_lon_e7, home_alt_mm,
+                                    0.0, 0.0, 0.0,
+                                    [1.0, 0.0, 0.0, 0.0],
+                                    0.0, 0.0, 0.0
+                                )
+                                mav_conn.mav.gps_global_origin_send(home_lat_e7, home_lon_e7, home_alt_mm)
+                            except Exception:
+                                pass
+                        elif (now_time - last_home_tx) >= 2.0:
+                            last_home_tx = now_time
+                            try:
+                                mav_conn.mav.home_position_send(
+                                    home_lat_e7, home_lon_e7, home_alt_mm,
+                                    0.0, 0.0, 0.0,
+                                    [1.0, 0.0, 0.0, 0.0],
+                                    0.0, 0.0, 0.0
+                                )
+                            except Exception:
+                                pass
+
+                    # For GPS_RAW_INT: HDOP eph=100 (1.0m) and VDOP epv=150 (1.5m) to clear 'Bad GPS Pos'
+                    raw_gps_lat = lat_e7 if has_gps_pos else 2147483647
+                    raw_gps_lon = lon_e7 if has_gps_pos else 2147483647
+                    gps_fix = max(3, int(latest_fix_type)) if (has_gps_pos and int(latest_satellites) >= 4) else int(latest_fix_type)
+                    eph = 100 if has_gps_pos else 65535  # 1.00 m HDOP -> clears "Bad GPS Pos"
+                    epv = 150 if has_gps_pos else 65535  # 1.50 m VDOP
+                    sats = max(12, int(latest_satellites)) if has_gps_pos else int(latest_satellites)
                     mav_conn.mav.gps_raw_int_send(
                         time_usec,
-                        int(latest_fix_type),
-                        int(latest_lat * 1e7),
-                        int(latest_lon * 1e7),
+                        gps_fix,
+                        raw_gps_lat,
+                        raw_gps_lon,
                         alt_mm,
-                        65535,  # eph
-                        65535,  # epv
+                        eph,
+                        epv,
                         int(estimated_airspeed * 100),  # vel in cm/s
                         int((latest_yaw % 360) * 100),
-                        int(latest_satellites)
+                        sats
                     )
+
+                    # Acceleration in m/s^2 (SI units for MAVLink HIGHRES_IMU)
+                    xacc_mps2 = float(latest_ax_g * 9.80665)
+                    yacc_mps2 = float(latest_ay_g * 9.80665)
+                    zacc_mps2 = float(latest_az_g * 9.80665)
+                    xgyro_rads = float(math.radians(latest_gx / 32.8))
+                    ygyro_rads = float(math.radians(latest_gy / 32.8))
+                    zgyro_rads = float(math.radians(latest_gz / 32.8))
+
+                    # Broadcast HIGHRES_IMU with real acceleration (m/s^2), gyro (rad/s) and pressure_alt
+                    # to populate Mission Planner Tuning graph (ax, ay, az, gx, gy, gz) and altasl.
+                    mav_conn.mav.highres_imu_send(
+                        time_usec,
+                        xacc_mps2,
+                        yacc_mps2,
+                        zacc_mps2,
+                        xgyro_rads,
+                        ygyro_rads,
+                        zgyro_rads,
+                        0.0, 0.0, 0.0,
+                        1013.25,
+                        0.0,
+                        alt_m,
+                        float(latest_temp),
+                        0x01 | 0x02 | 0x04 | 0x08 | 0x10 | 0x20 | 0x200 | 0x800 | 0x1000
+                    )
+
+                    # Also broadcast RAW_IMU (accel in mG: 1000 = 1g, gyro in mrad/s)
+                    mav_conn.mav.raw_imu_send(
+                        time_usec,
+                        int(round(latest_ax_g * 1000)),
+                        int(round(latest_ay_g * 1000)),
+                        int(round(latest_az_g * 1000)),
+                        int(round(xgyro_rads * 1000)),
+                        int(round(ygyro_rads * 1000)),
+                        int(round(zgyro_rads * 1000)),
+                        0, 0, 0
+                    )
+
                     mav_conn.mav.altitude_send(
                         time_usec,
                         alt_m,
@@ -755,7 +926,10 @@ def run_bridge(port_name=None, launch_mp=True):
                 # Drain incoming requests from Mission Planner (Parameters, Commands)
                 try:
                     while True:
-                        msg = mav_conn.recv_msg()
+                        try:
+                            msg = mav_conn.recv_msg()
+                        except (ConnectionResetError, OSError):
+                            break
                         if msg is None:
                             break
                         m_type = msg.get_type()
@@ -763,6 +937,7 @@ def run_bridge(port_name=None, launch_mp=True):
                         runtime_sec = float(now_time - start_time)
                         flttime_sec = float(cumulative_flight_time)
                         param_dict = {
+                            b"SYSID_SW_MREV": (120.0, mavutil.mavlink.MAV_PARAM_TYPE_REAL32),
                             b"SYSID_THISMAV": (1.0, mavutil.mavlink.MAV_PARAM_TYPE_REAL32),
                             b"STAT_RUNTIME": (runtime_sec, mavutil.mavlink.MAV_PARAM_TYPE_REAL32),
                             b"STAT_FLTTIME": (flttime_sec, mavutil.mavlink.MAV_PARAM_TYPE_REAL32),
@@ -805,8 +980,128 @@ def run_bridge(port_name=None, launch_mp=True):
                                         break
                             if not matched:
                                 mav_conn.mav.param_value_send(b"STAT_RUNTIME", runtime_sec, mavutil.mavlink.MAV_PARAM_TYPE_REAL32, total_params, 0)
-                        elif m_type == 'COMMAND_LONG':
-                            mav_conn.mav.command_ack_send(msg.command, mavutil.mavlink.MAV_RESULT_ACCEPTED)
+                        elif m_type == 'MISSION_REQUEST_LIST':
+                            src_sys = msg.get_srcSystem()
+                            src_comp = msg.get_srcComponent()
+                            mav_conn.mav.mission_count_send(src_sys, src_comp, 1 if home_position_set else 0)
+
+                        elif m_type in ('MISSION_REQUEST', 'MISSION_REQUEST_INT'):
+                            src_sys = msg.get_srcSystem()
+                            src_comp = msg.get_srcComponent()
+                            req_seq = getattr(msg, 'seq', 0)
+                            if req_seq == 0 and home_position_set:
+                                if m_type == 'MISSION_REQUEST':
+                                    mav_conn.mav.mission_item_send(
+                                        src_sys, src_comp, 0,
+                                        mavutil.mavlink.MAV_FRAME_GLOBAL,
+                                        mavutil.mavlink.MAV_CMD_NAV_WAYPOINT,
+                                        0, 1, 0.0, 0.0, 0.0, 0.0,
+                                        float(home_lat_e7) / 1e7, float(home_lon_e7) / 1e7, float(home_alt_mm) / 1000.0
+                                    )
+                                else:
+                                    mav_conn.mav.mission_item_int_send(
+                                        src_sys, src_comp, 0,
+                                        mavutil.mavlink.MAV_FRAME_GLOBAL_INT,
+                                        mavutil.mavlink.MAV_CMD_NAV_WAYPOINT,
+                                        0, 1, 0.0, 0.0, 0.0, 0.0,
+                                        home_lat_e7, home_lon_e7, float(home_alt_mm) / 1000.0
+                                    )
+                            else:
+                                mav_conn.mav.mission_ack_send(src_sys, src_comp, mavutil.mavlink.MAV_MISSION_ACCEPTED)
+
+                        elif m_type in ('MISSION_COUNT', 'MISSION_WRITE_PARTIAL_LIST'):
+                            src_sys = msg.get_srcSystem()
+                            src_comp = msg.get_srcComponent()
+                            mav_conn.mav.mission_request_int_send(src_sys, src_comp, 0)
+
+                        elif m_type in ('MISSION_ITEM', 'MISSION_ITEM_INT'):
+                            src_sys = msg.get_srcSystem()
+                            src_comp = msg.get_srcComponent()
+                            seq = getattr(msg, 'seq', 0)
+                            if seq == 0:
+                                item_x = getattr(msg, 'x', 0)
+                                item_y = getattr(msg, 'y', 0)
+                                item_z = getattr(msg, 'z', 0.0)
+                                if m_type == 'MISSION_ITEM':
+                                    if item_x != 0 or item_y != 0:
+                                        home_lat_e7 = int(round(item_x * 1e7))
+                                        home_lon_e7 = int(round(item_y * 1e7))
+                                        home_alt_mm = int(round(item_z * 1000))
+                                        home_position_set = True
+                                else:
+                                    if item_x != 0 or item_y != 0:
+                                        home_lat_e7 = int(item_x)
+                                        home_lon_e7 = int(item_y)
+                                        home_alt_mm = int(round(item_z * 1000))
+                                        home_position_set = True
+                            mav_conn.mav.mission_ack_send(src_sys, src_comp, mavutil.mavlink.MAV_MISSION_ACCEPTED)
+                            if home_position_set:
+                                try:
+                                    mav_conn.mav.home_position_send(
+                                        home_lat_e7, home_lon_e7, home_alt_mm,
+                                        0.0, 0.0, 0.0, [1.0, 0.0, 0.0, 0.0], 0.0, 0.0, 0.0
+                                    )
+                                except Exception:
+                                    pass
+
+                        elif m_type == 'MISSION_ACK':
+                            pass
+
+                        elif m_type == 'MISSION_SET_CURRENT':
+                            mav_conn.mav.mission_current_send(0)
+
+                        elif m_type in ('COMMAND_LONG', 'COMMAND_INT'):
+                            cmd_id = getattr(msg, 'command', 0)
+                            if cmd_id in (179, getattr(mavutil.mavlink, 'MAV_CMD_DO_SET_HOME', 179)):
+                                p1 = getattr(msg, 'param1', 1.0)
+                                if p1 == 1.0 and has_gps_pos:
+                                    home_lat_e7 = lat_e7
+                                    home_lon_e7 = lon_e7
+                                    home_alt_mm = alt_mm
+                                    home_position_set = True
+                                elif m_type == 'COMMAND_INT':
+                                    c_x = getattr(msg, 'x', 0)
+                                    c_y = getattr(msg, 'y', 0)
+                                    c_z = getattr(msg, 'z', 0.0)
+                                    if c_x != 0 or c_y != 0:
+                                        home_lat_e7 = int(c_x)
+                                        home_lon_e7 = int(c_y)
+                                        home_alt_mm = int(round(c_z * 1000))
+                                        home_position_set = True
+                                else:
+                                    p5 = getattr(msg, 'param5', 0.0)
+                                    p6 = getattr(msg, 'param6', 0.0)
+                                    p7 = getattr(msg, 'param7', 0.0)
+                                    if p5 != 0.0 or p6 != 0.0:
+                                        home_lat_e7 = int(round(p5 * 1e7))
+                                        home_lon_e7 = int(round(p6 * 1e7))
+                                        home_alt_mm = int(round(p7 * 1000))
+                                        home_position_set = True
+                                try:
+                                    mav_conn.mav.command_ack_send(cmd_id, mavutil.mavlink.MAV_RESULT_ACCEPTED)
+                                    if home_position_set:
+                                        mav_conn.mav.home_position_send(
+                                            home_lat_e7, home_lon_e7, home_alt_mm,
+                                            0.0, 0.0, 0.0, [1.0, 0.0, 0.0, 0.0], 0.0, 0.0, 0.0
+                                        )
+                                except Exception:
+                                    pass
+
+                            elif cmd_id in (410, getattr(mavutil.mavlink, 'MAV_CMD_GET_HOME_POSITION', 410)):
+                                try:
+                                    mav_conn.mav.command_ack_send(cmd_id, mavutil.mavlink.MAV_RESULT_ACCEPTED)
+                                    if home_position_set:
+                                        mav_conn.mav.home_position_send(
+                                            home_lat_e7, home_lon_e7, home_alt_mm,
+                                            0.0, 0.0, 0.0, [1.0, 0.0, 0.0, 0.0], 0.0, 0.0, 0.0
+                                        )
+                                except Exception:
+                                    pass
+                            else:
+                                try:
+                                    mav_conn.mav.command_ack_send(cmd_id, mavutil.mavlink.MAV_RESULT_ACCEPTED)
+                                except Exception:
+                                    pass
                 except Exception:
                     pass
 
@@ -835,16 +1130,23 @@ def run_bridge(port_name=None, launch_mp=True):
                     mode_tag = f"M{mode_num}" + ("+FLAP" if flaperons_on else "")
 
                 climb_display = f"{filtered_climb_rate:+4.1f}m/s"
-                sys.stdout.write(f"\r[MANTA] Modo: {mode_tag:<11} | Voo: {flt_min:02d}:{flt_sec:02d} | Bat: {latest_estimated_voltage:.2f}V ({batt_pct}%) | Alt: {latest_alt:+5.1f}m ({climb_display}) | LoRa: {rssi_display} / {snr_display}   ")
+                if latest_fix_type > 0:
+                    gps_display = f"Fix{latest_fix_type} S:{latest_satellites:02d} ({latest_lat:.5f},{latest_lon:.5f})"
+                else:
+                    gps_display = f"NoFix S:{latest_satellites:02d}"
+
+                rc_str = "RC:OK" if not rc_signal_lost else "RC:LOST"
+                accel_str = f"G:{latest_total_accel_g:.2f}g (X:{latest_ax_g:+.2f} Z:{latest_az_g:+.2f})"
+                sys.stdout.write(f"\r[MANTA] Mode: {mode_tag:<9} | {rc_str:<7} | {accel_str:<22} | GPS: {gps_display:<26} | Flight: {flt_min:02d}:{flt_sec:02d} | Bat: {latest_estimated_voltage:.2f}V ({batt_pct}%) | Alt: {latest_alt:+5.1f}m | LoRa: {rssi_display}/{snr_display}   ")
                 sys.stdout.flush()
 
             time.sleep(0.005)
 
     except KeyboardInterrupt:
-        print("\n\n[Bridge] Terminado pelo utilizador.")
+        print("\n\n[Bridge] Terminated by user.")
     except Exception as e:
         import traceback
-        print(f"\n\n[Bridge Error] Erro inesperado: {e}")
+        print(f"\n\n[Bridge Error] Unexpected error: {e}")
         traceback.print_exc()
     finally:
         global_shutdown()
@@ -853,9 +1155,9 @@ def run_bridge(port_name=None, launch_mp=True):
 
 def main():
     import argparse
-    parser = argparse.ArgumentParser(description="MANTA 20 Hz LoRa Telemetry & Mission Planner Bridge")
-    parser.add_argument("--port", "-p", type=str, default=None, help="Porta Serial COM (ex: COM4)")
-    parser.add_argument("--no-mp", action="store_true", help="Não iniciar o Mission Planner automaticamente")
+    parser = argparse.ArgumentParser(description="MANTA 5 Hz LoRa Telemetry & Mission Planner Bridge")
+    parser.add_argument("--port", "-p", type=str, default=None, help="Serial COM Port (e.g. COM4)")
+    parser.add_argument("--no-mp", action="store_true", help="Do not launch Mission Planner automatically")
     args = parser.parse_args()
 
     run_bridge(port_name=args.port, launch_mp=not args.no_mp)

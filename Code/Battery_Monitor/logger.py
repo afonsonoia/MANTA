@@ -15,10 +15,10 @@ MAX_PLOT_POINTS = 100
 BATTERY_DIVIDER_RATIO = 4.84  # Voltage divider factor from battery_monitor.ino (4.84:1 ratio)
 
 def calculate_battery_voltage(raw_adc):
-    """Calculates battery voltage matching the ESP32 polynomial equation:
-       voltage = -0.0000009 * (raw_adc^2) + 0.0089 * raw_adc - 5.8868
+    """Calculates battery voltage matching the calibrated ESP32 polynomial equation:
+       voltage = -0.000000884 * (raw_adc^2) + 0.008835 * raw_adc - 5.6904
     """
-    voltage = -0.0000009 * (raw_adc ** 2) + 0.0089 * raw_adc - 5.8868
+    voltage = -0.000000884 * (raw_adc ** 2) + 0.008835 * raw_adc - 5.6904
     return max(0.0, voltage)
 
 # Global state

@@ -28,12 +28,12 @@ from telemetry_codec import decode_ch5_mode
 
 # ── 1. GROUND TRUTH CALIBRATED TRANSMITTER VALUES ──────────────────────────────
 NOMINAL_CH5_CALIBRATION = [
-    {"index": 0, "swc": 1, "swb": "OFF", "pwm": 1166, "mode": 1, "flaperon": False, "name": "Modo 1 + Flaperons OFF"},
-    {"index": 1, "swc": 2, "swb": "OFF", "pwm": 1328, "mode": 2, "flaperon": False, "name": "Modo 2 (FBW Fixo) + Flaperons OFF"},
-    {"index": 2, "swc": 3, "swb": "OFF", "pwm": 1411, "mode": 3, "flaperon": False, "name": "Modo 3 (ESC PI-D) + Flaperons OFF"},
-    {"index": 3, "swc": 1, "swb": "ON",  "pwm": 1541, "mode": 1, "flaperon": True,  "name": "Modo 1 + Flaperons ON"},
-    {"index": 4, "swc": 2, "swb": "ON",  "pwm": 1825, "mode": 2, "flaperon": True,  "name": "Modo 2 (FBW Fixo) + Flaperons ON"},
-    {"index": 5, "swc": 3, "swb": "ON",  "pwm": 1942, "mode": 2, "flaperon": True,  "name": "Modo 2 (Auto Flap-Safe) + Flaperons ON"},
+    {"index": 0, "swc": 1, "swb": "OFF", "pwm": 1166, "mode": 1, "flaperon": False, "name": "Mode 1 + Flaperons OFF"},
+    {"index": 1, "swc": 2, "swb": "OFF", "pwm": 1328, "mode": 2, "flaperon": False, "name": "Mode 2 (Fixed FBW) + Flaperons OFF"},
+    {"index": 2, "swc": 3, "swb": "OFF", "pwm": 1411, "mode": 3, "flaperon": False, "name": "Mode 3 (ESC PI-D) + Flaperons OFF"},
+    {"index": 3, "swc": 1, "swb": "ON",  "pwm": 1541, "mode": 1, "flaperon": True,  "name": "Mode 1 + Flaperons ON"},
+    {"index": 4, "swc": 2, "swb": "ON",  "pwm": 1825, "mode": 2, "flaperon": True,  "name": "Mode 2 (Fixed FBW) + Flaperons ON"},
+    {"index": 5, "swc": 3, "swb": "ON",  "pwm": 1942, "mode": 2, "flaperon": True,  "name": "Mode 2 (Auto Flap-Safe) + Flaperons ON"},
 ]
 
 EXPECTED_MIDPOINTS = [
@@ -145,11 +145,11 @@ class TestPythonTelemetryCodecSync:
         """Tests that 1us below midpoint stays in lower mode, and at midpoint enters upper mode."""
         midpoint_transitions = [
             # (midpoint, expected_below, expected_at_or_above)
-            (1247, (1, False, "Modo 1 + Flaperons OFF"),               (2, False, "Modo 2 (FBW Fixo) + Flaperons OFF")),
-            (1370, (2, False, "Modo 2 (FBW Fixo) + Flaperons OFF"),   (3, False, "Modo 3 (ESC PI-D) + Flaperons OFF")),
-            (1476, (3, False, "Modo 3 (ESC PI-D) + Flaperons OFF"),   (1, True,  "Modo 1 + Flaperons ON")),
-            (1683, (1, True,  "Modo 1 + Flaperons ON"),               (2, True,  "Modo 2 (FBW Fixo) + Flaperons ON")),
-            (1884, (2, True,  "Modo 2 (FBW Fixo) + Flaperons ON"),   (2, True,  "Modo 2 (Auto Flap-Safe) + Flaperons ON")),
+            (1247, (1, False, "Mode 1 + Flaperons OFF"),               (2, False, "Mode 2 (Fixed FBW) + Flaperons OFF")),
+            (1370, (2, False, "Mode 2 (Fixed FBW) + Flaperons OFF"),   (3, False, "Mode 3 (ESC PI-D) + Flaperons OFF")),
+            (1476, (3, False, "Mode 3 (ESC PI-D) + Flaperons OFF"),   (1, True,  "Mode 1 + Flaperons ON")),
+            (1683, (1, True,  "Mode 1 + Flaperons ON"),               (2, True,  "Mode 2 (Fixed FBW) + Flaperons ON")),
+            (1884, (2, True,  "Mode 2 (Fixed FBW) + Flaperons ON"),   (2, True,  "Mode 2 (Auto Flap-Safe) + Flaperons ON")),
         ]
 
         for midpoint, expected_below, expected_above in midpoint_transitions:

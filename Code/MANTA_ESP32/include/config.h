@@ -7,12 +7,11 @@
 constexpr int PIN_BATTERY = 36; // ESP32 Pin VP / GPIO36
 constexpr int PIN_ESC = 25;     // ESC Control Pin D25
 
-// RC Receiver Input Pins
-constexpr int PIN_RC_CH1 = 39; // VIN / VN (GPIO39)
-constexpr int PIN_RC_CH2 = 34; // D34 (GPIO34)
-constexpr int PIN_RC_CH3 = 35; // D35 (GPIO35)
-constexpr int PIN_RC_CH4 = 32; // D32 (GPIO32)
-constexpr int PIN_RC_CH5 = 33; // D33 (GPIO33)
+// RC Receiver Configuration (FlySky FS-iA6B via i-Bus Protocol)
+// PCB Port CH1 (GPIO 39 / Pin VN) with integrated resistive voltage divider (5V -> 3.3V)
+constexpr int PIN_IBUS_RX = 39; // Hardware UART1 RX connected to FS-iA6B i-BUS SERVO port on PCB CH1
+constexpr long IBUS_BAUD = 115200; // Standard FlySky i-Bus baud rate (8N1)
+
 
 // Servo Output Pins (V-Tail Airframe)
 constexpr int PIN_SERVO_BR = 13; // Back Right (GPIO13)
@@ -29,6 +28,13 @@ constexpr float US_PER_DEGREE =
     11.11f; // ~11.11us per degree (1000us total span / 90 deg)
 constexpr uint8_t DEFAULT_SERVO_MAX_ANGLE_DEG =
     25; // Default +/- 25 degrees rotation limit (~278us from neutral: 1222us - 1778us)
+
+// Flaperon Expanded Servo Deflection Limit (FR & FL surfaces when flaperons are engaged)
+// Expanded from 25.0 deg (278 us) to 32.0 deg (~356 us) to allow full 20.0 deg flaps + roll authority
+// without premature headroom choking, while retaining >= 100 us safe margin from the 2000 us ceiling.
+constexpr uint8_t DEFAULT_FLAPERON_MAX_ANGLE_DEG = 32;
+constexpr int FLAPERON_MAX_PULSE_LIMIT_US =
+    (int)(DEFAULT_FLAPERON_MAX_ANGLE_DEG * US_PER_DEGREE + 0.5f); // ~356 us
 
 // Flaperons (Landing Flaps) Parameters: Deflect both roll surfaces 20 degrees DOWN
 constexpr float FLAPERON_DEFLECTION_DEG = 20.0f; // 20.0 deg DOWN max deflection for approach and landing
@@ -54,6 +60,11 @@ constexpr float RC_EXPO_FACTOR = 0.35f;
 constexpr int PIN_SDA = 21; // MPU6050 SDA Pin D21
 constexpr int PIN_SCL = 22; // MPU6050 SCL Pin D22
 
+// GPS UART Pin Configuration (Hardware UART2)
+constexpr int GPS_RX_PIN = 16;  // GPIO16 (RX2) connected to GPS TX
+constexpr int GPS_TX_PIN = 17;  // GPIO17 (TX2) connected to GPS RX
+constexpr long GPS_BAUD = 9600; // Standard NMEA GPS Baud Rate
+
 // LoRa Pin Configuration (VSPI & Control)
 constexpr int LORA_MOSI = 23;
 constexpr int LORA_MISO = 19;
@@ -63,13 +74,13 @@ constexpr int LORA_RST =
     -1; // RST not connected: avoids conflict with PIN_SERVO_BL on GPIO 14!
 constexpr int LORA_DIO0 = 4;
 
-// LoRa High-Speed Low-Power Parameters (~1.5km range @ ~46ms airtime for 49B packet)
+// LoRa Long-Range High-Penetration Parameters (~3-5km range, SF8, CR 4/6, 20dBm)
 constexpr long LORA_BAND = 433E6; // Frequency: 433 MHz
 constexpr int LORA_TX_POWER =
-    17; // 17 dBm (50mW power-optimized output for 1.5km range)
-constexpr int LORA_SF = 7; // Spreading Factor 7 (Enables 20 Hz transmission with 46ms ToA)
+    20; // 20 dBm (100mW max PA_BOOST output power for maximum range)
+constexpr int LORA_SF = 8; // Spreading Factor 8 (+3dB sensitivity gain, high obstacle penetration)
 constexpr long LORA_BW = 250E3; // Bandwidth 250 kHz (High frequency offset tolerance)
-constexpr int LORA_CR = 5;      // Coding rate 4/5
+constexpr int LORA_CR = 6;      // Coding rate 4/6 (Hamming FEC for obstacle & interference immunity)
 constexpr uint8_t LORA_SYNC_WORD = 0x12; // Matching LoRa Sync Word
 
 // Battery Monitoring & Safety Parameters (Supports 3S & 4S LiPo with Auto-Detection)
@@ -80,29 +91,31 @@ constexpr float DEFAULT_CUTOFF_VOLTAGE = 12.00f;     // Default 4S nominal thres
 constexpr unsigned long BATTERY_SAMPLE_INTERVAL_MS = 5000; // 5000ms = 0.2 Hz
 constexpr uint8_t LOW_VOLT_CONFIRM_COUNT = 3;        // Require 3 consecutive low readings to reject transient sag
 
-// High Frequency Sampling & Telemetry Broadcast Parameters
+// Sampling & 5.0 Hz Telemetry Broadcast Parameters
 constexpr unsigned long LOGGING_INTERVAL_MS =
-    60; // 60ms = ~16.6 Hz Telemetry Broadcast (Ensures safe margin above 56.45ms LoRa 61B Time-on-Air)
+    200; // 200ms = 5.0 Hz Telemetry Broadcast (Ensures ~63ms idle margin above ~137ms LoRa 74B Time-on-Air)
 
 constexpr unsigned long SAMPLE_INTERVAL_MS =
     10; // High frequency IMU sampling every 10ms (100 Hz sampling)
+constexpr unsigned long BARO_SAMPLE_INTERVAL_MS =
+    100; // BMP280 Barometer sampling every 100ms (10 Hz sampling)
 constexpr int ADC_OVERSAMPLE_PER_TICK =
     8; // 8 burst readings per sample tick for ADC noise filtering
 
 // ESC Throttle Limits & Soft Power Floor
 constexpr int THROTTLE_MIN_PULSE = 1000; // us (Armed / Off)
-constexpr int THROTTLE_MAX_PULSE = 2000; // us (Full throttle hardware limit)
+constexpr int THROTTLE_MAX_PULSE = 1900; // us (Capped full throttle hardware limit: 1900us)
 constexpr int THROTTLE_LOW_VOLT_CEILING_PULSE = 1350; // us (Soft power ceiling: ~35-40% throttle to glide/land safely)
 
-// Throttle Transmitter Input Range & Scaled Output Range (Capped at 1800us)
+// Throttle Transmitter Input Range & Scaled Output Range (Capped at 1900us)
 constexpr int THROTTLE_INPUT_MIN_US = 1000; // Expected transmitter stick bottom
 constexpr int THROTTLE_INPUT_MAX_US = 2000; // Expected transmitter stick top
 constexpr int THROTTLE_OUTPUT_MIN_US =
     1000; // Capped ESC output bottom (1000us)
 constexpr int THROTTLE_OUTPUT_MAX_US =
-    1800; // Capped ESC output top (1800us max cap)
+    1900; // Capped ESC output top (1900us max cap)
 
-// ── FLY-BY-WIRE & CLOSED-LOOP PID PARAMETERS (Hélice Principal) ─────────────
+// ── FLY-BY-WIRE & CLOSED-LOOP PID PARAMETERS ────────────────────────────────
 // Pitch PI-D Gains (V-Tail: Servos BR & BL)
 constexpr float PID_PITCH_KP = 5.00f;
 constexpr float PID_PITCH_KI = 2.50f;
@@ -121,9 +134,12 @@ constexpr float FBW_MAX_ROLL_DEG = 45.0f;
 constexpr float FBW_EXPO_FACTOR = 0.08f;
 
 // Anti-windup maximum integral authority in PWM microseconds:
-// Expanded from 50.0us (+/-4.5 deg) to 100.0us (+/-9.0 deg trim authority, ~36% of anglePulseLimit = 278us)
-// to reliably eliminate steady-state attitude droop while reserving 178us (64%) for dynamic P+D response.
-constexpr float MAX_INTEGRAL_PULSE_US = 100.0f;
+// Pitch integral ceiling: 100.0us (+/-9.0 deg trim authority, ~36% of anglePulseLimit = 278us)
+// Roll integral ceiling: 150.0us (+/-13.5 deg trim authority, ~54% of anglePulseLimit = 278us, 50% increase)
+// to reliably eliminate steady-state attitude droop while reserving dynamic P+D response.
+constexpr float MAX_INTEGRAL_PULSE_PITCH_US = 100.0f;
+constexpr float MAX_INTEGRAL_PULSE_ROLL_US = 150.0f;
+constexpr float MAX_INTEGRAL_PULSE_US = MAX_INTEGRAL_PULSE_PITCH_US;
 
 // Coordinated Turn Pitch Compensation Gain (compensates vertical lift drop in turns)
 constexpr float TURN_PITCH_COMP_GAIN = 6.0f; // degrees factor: ~1.8 deg added at 45 deg bank
@@ -135,7 +151,7 @@ constexpr float IMU_PITCH_MOUNTING_OFFSET_DEG = 9.2f;
 // (+2.5 deg correction over original 1.9 deg to eliminate left-roll bank / counter-clockwise turning bias)
 constexpr float IMU_ROLL_MOUNTING_OFFSET_DEG = 4.4f;
 
-// ── EXTREMUM SEEKING CONTROL (ESC) PARAMETERS (MODO 2) ──────────────────────
+// ── EXTREMUM SEEKING CONTROL (ESC) PARAMETERS (MODE 3) ──────────────────────
 // Pitch Extremum Seeking: Dither frequency ~1.0 Hz, amplitude ~0.08 (8% variation)
 constexpr float ESC_PITCH_OMEGA = 6.283185f;  // 2 * PI * 1.0 Hz (rad/s)
 constexpr float ESC_PITCH_DITHER_AMP = 0.08f; // 8% dither amplitude
@@ -201,5 +217,29 @@ constexpr uint16_t CH5_THRES_M3_ON_TO_OFF = CH5_THRES_M3_ON_TO_M2_ON;
 
 // Temporal debounce confirmation ticks (2 consecutive 20ms cycles = 40ms rejection window)
 constexpr uint8_t CH5_DEBOUNCE_CONFIRM_TICKS = 2;
+
+// ── AUTONOMOUS EMERGENCY FAILSAFE PARAMETERS (SIGNAL LOSS RECOVERY) ────────
+constexpr int FAILSAFE_ARM_THROTTLE_THRESHOLD_US = 1600; // Only activate in-flight failsafe if throttle > 1600us in past
+constexpr int FAILSAFE_DISARM_THROTTLE_THRESHOLD_US = 1100; // Throttle < 1100us considered idle/landed
+constexpr unsigned long FAILSAFE_LANDING_DISARM_TIMEOUT_MS = 20000; // 20s continuous idle throttle on ground disarms failsafe
+constexpr unsigned long FAILSAFE_STAGE2_TIMEOUT_MS = 30000; // 30s maximum in Stage 2 before transitioning to Stage 3
+constexpr unsigned long FAILSAFE_ETAPA2_TIMEOUT_MS = FAILSAFE_STAGE2_TIMEOUT_MS; // Backward compatibility alias
+
+constexpr float FAILSAFE_CLIMB_ALT_M = 25.0f;            // Target altitude for climb (m)
+constexpr float FAILSAFE_CLIMB_PITCH_DEG = 20.0f;        // Climb pitch attitude (degrees UP)
+constexpr float FAILSAFE_CLIMB_ROLL_DEG = 0.0f;          // Wings level during climb (degrees)
+constexpr int FAILSAFE_CLIMB_THROTTLE_US = 1800;         // Climb throttle (us)
+
+constexpr float FAILSAFE_LOITER_ALT_TARGET_M = 25.0f;    // Target loiter altitude (m)
+constexpr float FAILSAFE_LOITER_HIGH_ALT_M = 40.0f;      // High altitude boundary for aggressive descent (m)
+constexpr float FAILSAFE_LOITER_PITCH_DEG = 5.0f;        // Loiter pitch attitude (degrees UP)
+constexpr float FAILSAFE_LOITER_ROLL_DEG = -30.0f;       // Loiter roll attitude (30 degrees LEFT bank)
+constexpr int FAILSAFE_LOITER_THROTTLE_BASE_US = 1500;   // Nominal base throttle for Stage 2 (us)
+constexpr int FAILSAFE_LOITER_MIN_THROTTLE_US = 1250;    // Minimum throttle floor in Stage 2 to prevent stall in 30 deg bank
+
+// Slew rate limits for smooth linear transitions (per 20ms cycle = 50Hz)
+constexpr int FAILSAFE_THROTTLE_SLEW_US_PER_TICK = 1;    // Strictly 1 us per tick (~50 us/s) for ultra-smooth ramp rate
+constexpr float FAILSAFE_PITCH_SLEW_DEG_PER_TICK = 0.5f; // ~25 deg/s pitch slew rate
+constexpr float FAILSAFE_ROLL_SLEW_DEG_PER_TICK = 0.8f;  // ~40 deg/s roll slew rate
 
 #endif // CONFIG_H

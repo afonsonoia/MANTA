@@ -37,7 +37,7 @@ def fetch_elevation(lat, lon, zoom=14):
     return elevation
 
 def main():
-    # Coordinates: Chão das Feiteiras, Madeira
+    # Coordinates: Chao das Feiteiras, Madeira
     lat = 32.723
     lon = -16.892
     
@@ -62,7 +62,7 @@ def main():
     
     surf = ax.plot_surface(X, Y, Z, cmap='terrain', edgecolor='none', alpha=0.9)
     
-    ax.set_title("MANTA - Virtual FPV Ground Station\nLocation: Chão das Feiteiras (Madeira)", fontsize=14, color='white')
+    ax.set_title("MANTA - Virtual FPV Ground Station\nLocation: Chao das Feiteiras (Madeira)", fontsize=14, color='white')
     ax.set_zlim(np.min(Z) - 100, np.max(Z) + 500)
     ax.axis('off')
     

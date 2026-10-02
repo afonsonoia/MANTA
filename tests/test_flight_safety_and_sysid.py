@@ -432,4 +432,51 @@ class TestFlightSafetyAndSysID:
         assert pitch_col2 == "pitch_deg", "Must match pitch_deg without picking rc2_pitch_pwm"
         assert roll_col2 == "roll_deg", "Must match roll_deg without getting confused with rc1_roll_pwm"
 
+    def test_ibus_protocol_decoding_and_checksum_verification(self):
+        """Validates FlySky FS-iA6B 32-byte i-Bus protocol frame packing, checksum validation, and channel extraction."""
+        channels = [1520, 1480, 1100, 1500, 1825] + [1500] * 9
+        assert len(channels) == 14
+
+        # Pack 32-byte frame
+        frame = bytearray(32)
+        frame[0] = 0x20  # Length
+        frame[1] = 0x40  # Command
+
+        for ch_idx, ch_val in enumerate(channels):
+            frame[2 + ch_idx * 2] = ch_val & 0xFF
+            frame[3 + ch_idx * 2] = (ch_val >> 8) & 0xFF
+
+        # Calculate 16-bit checksum: 0xFFFF - sum(bytes 0..29)
+        checksum = 0xFFFF - sum(frame[:30])
+        frame[30] = checksum & 0xFF
+        frame[31] = (checksum >> 8) & 0xFF
+
+        # Verification parser logic
+        def parse_ibus(pkt: bytes):
+            if len(pkt) != 32 or pkt[0] != 0x20 or pkt[1] != 0x40:
+                return None
+            calc_chk = 0xFFFF - sum(pkt[:30])
+            frame_chk = pkt[30] | (pkt[31] << 8)
+            if calc_chk != frame_chk:
+                return None
+            out_ch = []
+            for i in range(14):
+                val = pkt[2 + i * 2] | (pkt[3 + i * 2] << 8)
+                out_ch.append(val)
+            return out_ch
+
+        decoded = parse_ibus(bytes(frame))
+        assert decoded is not None
+        assert decoded[0] == 1520  # CH1
+        assert decoded[1] == 1480  # CH2
+        assert decoded[2] == 1100  # CH3
+        assert decoded[3] == 1500  # CH4
+        assert decoded[4] == 1825  # CH5
+
+        # Corrupted packet check
+        corrupted_frame = bytearray(frame)
+        corrupted_frame[10] ^= 0x01
+        assert parse_ibus(bytes(corrupted_frame)) is None
+
+
 

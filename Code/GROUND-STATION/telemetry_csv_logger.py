@@ -28,15 +28,19 @@ class TelemetryCSVLogger:
         if self.is_running:
             return True
         
-        # Ensure dedicated logs directory exists
-        log_dir = "flight_logs"
-        os.makedirs(log_dir, exist_ok=True)
+        _script_dir = os.path.dirname(os.path.abspath(__file__))
+        log_dir = os.path.join(_script_dir, "flight_logs")
 
         if filename:
-            self.file_path = os.path.join(log_dir, os.path.basename(filename))
+            self.file_path = filename
         if not self.file_path:
+            os.makedirs(log_dir, exist_ok=True)
             timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S")
             self.file_path = os.path.join(log_dir, f"manta_pid_flight_{timestamp_str}.csv")
+        else:
+            parent_dir = os.path.dirname(os.path.abspath(self.file_path))
+            if parent_dir:
+                os.makedirs(parent_dir, exist_ok=True)
             
         try:
             self.file_obj = open(self.file_path, "w", newline="", encoding="utf-8", buffering=1)
@@ -53,9 +57,19 @@ class TelemetryCSVLogger:
                 "raw_accel_x",
                 "raw_accel_y",
                 "raw_accel_z",
+                "accel_x_g",
+                "accel_y_g",
+                "accel_z_g",
+                "total_accel_g",
+                "accel_x_mps2",
+                "accel_y_mps2",
+                "accel_z_mps2",
                 "raw_gyro_x",
                 "raw_gyro_y",
                 "raw_gyro_z",
+                "gyro_x_dps",
+                "gyro_y_dps",
+                "gyro_z_dps",
                 "ch1_roll_pwm",
                 "ch2_pitch_pwm",
                 "ch3_throttle_pwm",
@@ -73,8 +87,10 @@ class TelemetryCSVLogger:
                 "satellites",
                 "gps_fix_type",
                 "rc_signal_lost",
+                "rc_data_received",
                 "flaperon_active",
                 "flight_mode",
+                "failsafe_stage",
                 "esc_active",
                 "pitch_kp",
                 "pitch_ki",
@@ -113,6 +129,24 @@ class TelemetryCSVLogger:
         ch3 = rc[2] if len(rc) > 2 else 0
         ch5 = telemetry_dict.get("rc5", rc[4] if len(rc) > 4 else (rc[3] if len(rc) > 3 else 0))
 
+        raw_ax = telemetry_dict.get("accel_x", 0)
+        raw_ay = telemetry_dict.get("accel_y", 0)
+        raw_az = telemetry_dict.get("accel_z", 0)
+        raw_gx = telemetry_dict.get("gyro_x", 0)
+        raw_gy = telemetry_dict.get("gyro_y", 0)
+        raw_gz = telemetry_dict.get("gyro_z", 0)
+
+        ax_g = round(raw_ax / 16384.0, 3)
+        ay_g = round(raw_ay / 16384.0, 3)
+        az_g = round(-raw_az / 16384.0, 3)
+        total_g = round((ax_g**2 + ay_g**2 + az_g**2)**0.5, 2)
+        ax_mps2 = round(ax_g * 9.80665, 2)
+        ay_mps2 = round(ay_g * 9.80665, 2)
+        az_mps2 = round(az_g * 9.80665, 2)
+        gx_dps = round(raw_gx / 32.8, 1)
+        gy_dps = round(raw_gy / 32.8, 1)
+        gz_dps = round(raw_gz / 32.8, 1)
+
         row = [
             iso_ts,
             f"{epoch_ts:.6f}",
@@ -120,12 +154,22 @@ class TelemetryCSVLogger:
             telemetry_dict.get("pkt_seq", 0),
             telemetry_dict.get("pitch", 0.0),
             telemetry_dict.get("roll", 0.0),
-            telemetry_dict.get("accel_x", 0),
-            telemetry_dict.get("accel_y", 0),
-            telemetry_dict.get("accel_z", 0),
-            telemetry_dict.get("gyro_x", 0),
-            telemetry_dict.get("gyro_y", 0),
-            telemetry_dict.get("gyro_z", 0),
+            raw_ax,
+            raw_ay,
+            raw_az,
+            ax_g,
+            ay_g,
+            az_g,
+            total_g,
+            ax_mps2,
+            ay_mps2,
+            az_mps2,
+            raw_gx,
+            raw_gy,
+            raw_gz,
+            gx_dps,
+            gy_dps,
+            gz_dps,
             ch1,
             ch2,
             ch3,
@@ -143,8 +187,10 @@ class TelemetryCSVLogger:
             telemetry_dict.get("satellites", telemetry_dict.get("sats", 0)),
             telemetry_dict.get("fix_type", telemetry_dict.get("fixType", 0)),
             1 if telemetry_dict.get("rcSignalLost", False) else 0,
+            1 if telemetry_dict.get("rc_data_received", telemetry_dict.get("rcDataReceived", not telemetry_dict.get("rcSignalLost", False))) else 0,
             1 if telemetry_dict.get("flaperon_active", telemetry_dict.get("flaperonActive", telemetry_dict.get("isAssistMode", False))) else 0,
             telemetry_dict.get("flight_mode", telemetry_dict.get("flightMode", 1)),
+            telemetry_dict.get("failsafe_stage", telemetry_dict.get("failsafeStage", 0)),
             1 if telemetry_dict.get("isEscActive", telemetry_dict.get("is_esc_active", False)) else 0,
             telemetry_dict.get("pitch_kp", telemetry_dict.get("pitchKp", 9.35)),
             telemetry_dict.get("pitch_ki", telemetry_dict.get("pitchKi", 5.00)),

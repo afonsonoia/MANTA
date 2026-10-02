@@ -72,12 +72,12 @@ void loop() {
     float press = bmp.readPressure() / 100.0F;
     float alt = bmp.readAltitude(calibrated_sea_level_pressure);
 
-    String dados = "Temp: " + String(temp, 1) + "C | " +
-                   "Press: " + String(press, 1) + "hPa | " +
-                   "Alt: " + String(alt, 1) + "m";
+    String data = "Temp: " + String(temp, 1) + "C | " +
+                  "Press: " + String(press, 1) + "hPa | " +
+                  "Alt: " + String(alt, 1) + "m";
 
-    Serial.println("Sending: " + dados);
-    client.println(dados);
+    Serial.println("Sending: " + data);
+    client.println(data);
 
     unsigned long t = millis();
     while (client.available() == 0 && millis() - t < 500);

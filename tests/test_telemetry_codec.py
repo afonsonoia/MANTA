@@ -44,6 +44,7 @@ def generate_random_telemetry():
         "is_low_volt": random.choice([True, False]),
         "is_esc_active": random.choice([True, False]),
         "flight_mode": random.choice([1, 2, 3]),
+        "failsafe_stage": random.choice([0, 1, 2, 3, 4]),
         "pitch_kp": round(random.uniform(5.0, 25.0), 2),
         "pitch_ki": round(random.uniform(1.0, 10.0), 2),
         "pitch_kd": round(random.uniform(0.1, 2.0), 3),
@@ -109,15 +110,22 @@ def test_random_telemetry_fuzzing_500_iterations():
         assert decoded["batteryVoltage"] == pytest.approx(orig["battery_v"], abs=0.01), f"[Iteration {i+1}] batteryVoltage mismatch"
         assert decoded["alt"] == pytest.approx(orig["alt"], abs=0.1), f"[Iteration {i+1}] alt mismatch"
         assert decoded["rcSignalLost"] == orig["rc_signal_lost"], f"[Iteration {i+1}] rcSignalLost mismatch"
+        assert decoded["rc_data_received"] == (not orig["rc_signal_lost"]), f"[Iteration {i+1}] rc_data_received mismatch"
         assert decoded["isAssistMode"] == orig["is_assist_mode"], f"[Iteration {i+1}] isAssistMode mismatch"
         assert decoded["isEscActive"] == orig["is_esc_active"], f"[Iteration {i+1}] isEscActive mismatch"
         assert decoded["flightMode"] == orig["flight_mode"], f"[Iteration {i+1}] flightMode mismatch"
+        assert decoded["failsafe_stage"] == orig["failsafe_stage"], f"[Iteration {i+1}] failsafe_stage mismatch"
         assert decoded["pitch_kp"] == pytest.approx(orig["pitch_kp"], abs=0.01), f"[Iteration {i+1}] pitch_kp mismatch"
         assert decoded["pitch_ki"] == pytest.approx(orig["pitch_ki"], abs=0.01), f"[Iteration {i+1}] pitch_ki mismatch"
         assert decoded["pitch_kd"] == pytest.approx(orig["pitch_kd"], abs=0.001), f"[Iteration {i+1}] pitch_kd mismatch"
         assert decoded["roll_kp"] == pytest.approx(orig["roll_kp"], abs=0.01), f"[Iteration {i+1}] roll_kp mismatch"
         assert decoded["roll_ki"] == pytest.approx(orig["roll_ki"], abs=0.01), f"[Iteration {i+1}] roll_ki mismatch"
         assert decoded["roll_kd"] == pytest.approx(orig["roll_kd"], abs=0.001), f"[Iteration {i+1}] roll_kd mismatch"
+        assert decoded["lat"] == pytest.approx(orig["lat"], abs=1e-5), f"[Iteration {i+1}] lat mismatch"
+        assert decoded["lon"] == pytest.approx(orig["lon"], abs=1e-5), f"[Iteration {i+1}] lon mismatch"
+        assert decoded["gps_alt"] == pytest.approx(orig["gps_alt"], abs=0.1), f"[Iteration {i+1}] gps_alt mismatch"
+        assert decoded["satellites"] == orig["satellites"], f"[Iteration {i+1}] satellites mismatch"
+        assert decoded["fix_type"] == orig["gps_fix"], f"[Iteration {i+1}] fix_type mismatch"
 
     print(f"[CI/CD Telemetry Codec Test] SUCCESS: All {N_ITERATIONS} randomized telemetry packets matched 100% perfectly!")
 
@@ -383,7 +391,7 @@ def test_mode2_esc_telemetry_encoding_decoding():
         "pkt_seq": 42,
         "timestamp_ms": 98765
     }
-    encoded = encode_telemetry(**data)
+    encoded = encode_telemetry(**data, packet_format="61B")
     assert len(encoded) == 61
 
     decoded = decode_telemetry(encoded)
@@ -400,7 +408,7 @@ def test_mode2_esc_telemetry_encoding_decoding():
 
 
 def test_mode3_adaptive_pid_telemetry_encoding_decoding():
-    """Verifies that Mode 3 adaptive fine-tuning (Extremum Seeking PI-D) encodes and decodes adapted gains with high precision."""
+    """Verifies that Mode 3 adaptive fine-tuning (Extremum Seeking PI-D) encodes and decodes adapted gains with high precision in legacy 61B."""
     data = {
         "pitch": 8.2,
         "roll": -14.6,
@@ -422,7 +430,7 @@ def test_mode3_adaptive_pid_telemetry_encoding_decoding():
         "pkt_seq": 105,
         "timestamp_ms": 254100
     }
-    encoded = encode_telemetry(**data)
+    encoded = encode_telemetry(**data, packet_format="61B")
     assert len(encoded) == 61
 
     decoded = decode_telemetry(encoded)
@@ -438,6 +446,64 @@ def test_mode3_adaptive_pid_telemetry_encoding_decoding():
     assert decoded["roll_kp"] == 18.20
     assert decoded["roll_ki"] == 5.00
     assert decoded["roll_kd"] == 1.650
+
+
+def test_73b_gps_pid_telemetry_encoding_decoding():
+    """Verifies that the legacy 73-byte format encodes and decodes both GPS (lat, lon, alt, sats, fix) and active PID gains."""
+    data = generate_random_telemetry()
+    data["lat"] = 38.7251000
+    data["lon"] = -9.1502000
+    data["gps_alt"] = 125.4
+    data["satellites"] = 14
+    data["gps_fix"] = 3
+    data["flight_mode"] = 2
+    data["pitch_kp"] = 9.35
+    data["roll_kp"] = 15.00
+    data["packet_format"] = "73B"
+
+    encoded = encode_telemetry(**data)
+    assert len(encoded) == 73
+
+    decoded = decode_telemetry(encoded)
+    assert decoded is not None
+    assert decoded["packet_size"] == 73
+    assert decoded["lat"] == pytest.approx(38.7251000, abs=1e-5)
+    assert decoded["lon"] == pytest.approx(-9.1502000, abs=1e-5)
+    assert decoded["gps_alt"] == pytest.approx(125.4, abs=0.1)
+    assert decoded["satellites"] == 14
+    assert decoded["fix_type"] == 3
+    assert decoded["gps_fixed"] is True
+    assert decoded["flight_mode"] == 2
+    assert decoded["failsafe_stage"] == 0
+    assert decoded["pitch_kp"] == pytest.approx(9.35, abs=0.01)
+    assert decoded["roll_kp"] == pytest.approx(15.00, abs=0.01)
+
+
+def test_74b_failsafe_stage_telemetry_encoding_decoding():
+    """Verifies that the primary 74-byte format correctly encodes and decodes failsafe stages (0=INACTIVE, 1=GROUND, 2=CLIMB, 3=LOITER, 4=DESCEND)."""
+    expected_stage_names = {
+        0: "INACTIVE",
+        1: "GROUND",
+        2: "CLIMB",
+        3: "LOITER",
+        4: "DESCEND"
+    }
+    for stage, name in expected_stage_names.items():
+        data = generate_random_telemetry()
+        data["failsafe_stage"] = stage
+        data["flight_mode"] = 2
+        data["packet_format"] = "74B"
+
+        encoded = encode_telemetry(**data)
+        assert len(encoded) == 74
+
+        decoded = decode_telemetry(encoded)
+        assert decoded is not None
+        assert decoded["packet_size"] == 74
+        assert decoded["failsafe_stage"] == stage
+        assert decoded["failsafeStage"] == stage
+        assert decoded["failsafe_stage_name"] == name
+
 
 
 def test_flight_loggers_include_pid_and_mode_headers(tmp_path):
@@ -521,6 +587,53 @@ def test_crc16_lut_equivalence():
     for _ in range(200):
         test_payload = bytes(random.randint(0, 255) for _ in range(random.randint(1, 100)))
         assert calculate_crc16(test_payload) == reference_crc16(test_payload), "CRC LUT mismatch with reference algorithm!"
+
+
+def test_rc_data_received_bit():
+    """Validates that Bit 4 in flags accurately reflects whether RC transmitter data is actively received."""
+    # 1. Transmitter Connected (rc_signal_lost = False -> Bit 4 = 1, Bit 0 = 0)
+    pkt_connected = encode_telemetry(
+        pitch=0.0, roll=0.0,
+        accel_x=0, accel_y=0, accel_z=-4000,
+        gyro_x=0, gyro_y=0, gyro_z=0,
+        rc1=1500, rc2=1500, rc3=1000, rc5=1166,
+        rc_signal_lost=False
+    )
+    dec_connected = decode_telemetry(pkt_connected)
+    assert dec_connected is not None
+    assert dec_connected["rcSignalLost"] is False
+    assert dec_connected["rc_signal_lost"] is False
+    assert dec_connected["rc_data_received"] is True
+    assert dec_connected["rc_connected"] is True
+    assert dec_connected["rc_received"] is True
+
+    # 2. Transmitter Disconnected / Signal Lost (rc_signal_lost = True -> Bit 4 = 0, Bit 0 = 1)
+    pkt_lost = encode_telemetry(
+        pitch=0.0, roll=0.0,
+        accel_x=0, accel_y=0, accel_z=-4000,
+        gyro_x=0, gyro_y=0, gyro_z=0,
+        rc1=0, rc2=0, rc3=0, rc5=0,
+        rc_signal_lost=True
+    )
+    dec_lost = decode_telemetry(pkt_lost)
+    assert dec_lost is not None
+    assert dec_lost["rcSignalLost"] is True
+    assert dec_lost["rc_signal_lost"] is True
+    assert dec_lost["rc_data_received"] is False
+    assert dec_lost["rc_connected"] is False
+    assert dec_lost["rc_received"] is False
+
+    # 3. Explicit rc_data_received override
+    pkt_custom = encode_telemetry(
+        pitch=0.0, roll=0.0,
+        accel_x=0, accel_y=0, accel_z=-4000,
+        gyro_x=0, gyro_y=0, gyro_z=0,
+        rc1=1500, rc2=1500, rc3=1000, rc5=1166,
+        rc_signal_lost=False,
+        rc_data_received=True
+    )
+    dec_custom = decode_telemetry(pkt_custom)
+    assert dec_custom["rc_data_received"] is True
 
 
 

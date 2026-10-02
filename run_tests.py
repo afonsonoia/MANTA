@@ -29,8 +29,8 @@ CATEGORIES = {
     },
     "telemetry": {
         "title": "Simplex Telemetry Codec & Protocols",
-        "description": "61-byte packet binary codec, CRC16 LUT, CSV logging & Ground Station buzzer",
-        "files": ["tests/test_telemetry_codec.py", "tests/test_ground_station_buzzer.py"]
+        "description": "74-byte / 73-byte packet binary codec, GPS Mission Planner pipeline, CRC16 LUT, CSV logging & Ground Station buzzer",
+        "files": ["tests/test_telemetry_codec.py", "tests/test_gps_mission_planner_pipeline.py", "tests/test_ground_station_buzzer.py", "tests/test_flight_replay_simulator.py"]
     },
     "safety": {
         "title": "Flight Safety, Failsafes & SysID Alignment",

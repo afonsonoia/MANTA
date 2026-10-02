@@ -60,6 +60,13 @@ class TestMantaPiBoot(unittest.TestCase):
             "manta_boot.sh must trigger active Wi-Fi scan/reassociation",
         )
 
+        # Flight/recording mode blocks Wi-Fi after timeout
+        self.assertIn(
+            "rfkill block wifi",
+            content,
+            "manta_boot.sh must block Wi-Fi after timeout in flight/recording mode",
+        )
+
     def test_boot_script_connection_detection(self):
         """Verify manta_boot.sh implements intelligent connection check with IP, nmcli, and ping."""
         with open(BOOT_SCRIPT, "r", encoding="utf-8") as f:

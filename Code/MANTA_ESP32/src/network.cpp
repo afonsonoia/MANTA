@@ -70,11 +70,14 @@ void sendTelemetry(
     uint16_t rch1, uint16_t rch2, uint16_t rch3, uint16_t rch5,
     uint16_t srvBR, uint16_t srvBL, uint16_t srvFR, uint16_t srvFL, uint16_t escThrot,
     float batteryVoltage, float alt,
+    int32_t latE7, int32_t lonE7, int16_t gpsAltX10,
+    uint8_t satellites, uint8_t fixType,
     bool rcSignalLost,
     bool flaperonActive,
     bool isLowVolt,
     bool isEscActive,
     uint8_t flightMode,
+    uint8_t failsafeStage,
     float pitchKp, float pitchKi, float pitchKd,
     float rollKp, float rollKi, float rollKd
 ) {
@@ -90,10 +93,13 @@ void sendTelemetry(
     return; // Don't block flight controller while LoRa is offline
   }
 
+  bool rcDataReceived = isRCDataReceived();
+
   uint8_t flags = (rcSignalLost ? 0x01 : 0) |
                   (flaperonActive ? 0x02 : 0) |
                   (isLowVolt ? 0x04 : 0) |
-                  (isEscActive ? 0x08 : 0);
+                  (isEscActive ? 0x08 : 0) |
+                  (rcDataReceived ? 0x10 : 0); // Bit 4: RC Data Received (1 = receiving from transmitter, 0 = signal lost / off)
 
   MantaTelemetryPacket pkt;
   encode_telemetry_packet(&pkt,
@@ -105,8 +111,11 @@ void sendTelemetry(
                           rch1, rch2, rch3, rch5,
                           srvBR, srvBL, srvFR, srvFL, escThrot,
                           batteryVoltage, alt,
+                          latE7, lonE7, gpsAltX10,
+                          satellites, fixType,
                           flags,
                           flightMode,
+                          failsafeStage,
                           pitchKp, pitchKi, pitchKd,
                           rollKp, rollKi, rollKd);
 
@@ -117,9 +126,8 @@ void sendTelemetry(
     lastSuccessfulTxTime = millis();
     packetCount++;
   } else {
-    // If radio remains busy for > 200ms (stalled transmission), auto-recover
-    // NOTE: Do NOT reset lastSuccessfulTxTime here — only update it on real TX success (line above)
-    if (lastSuccessfulTxTime > 0 && millis() - lastSuccessfulTxTime > 200) {
+    // If radio remains busy for > 600ms (stalled transmission across 3 5Hz cycles), auto-recover
+    if (lastSuccessfulTxTime > 0 && millis() - lastSuccessfulTxTime > 600) {
       attemptLoRaStart();
     }
   }
